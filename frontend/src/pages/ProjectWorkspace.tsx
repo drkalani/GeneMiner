@@ -21,9 +21,26 @@ const defaultTrainConfig = (): TrainingConfig => ({
   fp16: null,
 });
 
+const mpsTrainPreset = (): TrainingConfig => ({
+  processor: "mps",
+  base_model: "dmis-lab/biobert-v1.1",
+  learning_rate: 2e-5,
+  num_train_epochs: 3,
+  per_device_train_batch_size: 4,
+  per_device_eval_batch_size: 4,
+  weight_decay: 0.01,
+  seed: 42,
+  max_length: 256,
+  fp16: false,
+});
+
 const exampleArticlesJson = `[
   {"pmid":"10000001","text":"TGF-beta signaling in diabetic nephropathy and kidney fibrosis.","label":1},
   {"pmid":"10000002","text":"Weather patterns in coastal regions unrelated to nephrology.","label":0}
+]`;
+const examplePipelineArticlesJson = `[
+  {"pmid":"10000001","text":"TGF-beta signaling in diabetic nephropathy and kidney fibrosis."},
+  {"pmid":"10000002","text":"Weather patterns in coastal regions unrelated to nephrology."}
 ]`;
 
 export function ProjectWorkspace() {
@@ -46,6 +63,8 @@ export function ProjectWorkspace() {
   const [pipeJson, setPipeJson] = useState(exampleArticlesJson);
   const [processor, setProcessor] = useState<Processor>("auto");
   const [nerModel, setNerModel] = useState("pruas/BENT-PubMedBERT-NER-Gene");
+  const [pipeBatchSize, setPipeBatchSize] = useState(4);
+  const [pipeUseWikipedia, setPipeUseWikipedia] = useState(true);
   const [pipeResult, setPipeResult] = useState<Record<string, unknown> | null>(
     null
   );
@@ -139,8 +158,8 @@ export function ProjectWorkspace() {
         mode,
         processor,
         ner_model: nerModel,
-        batch_size: 8,
-        use_wikipedia_fallback: true,
+      batch_size: pipeBatchSize,
+      use_wikipedia_fallback: pipeUseWikipedia,
       };
       if (mode === "normalize") {
         payload.mentions_json = JSON.parse(normJson) as Record<
@@ -155,6 +174,22 @@ export function ProjectWorkspace() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const applyTrainPreset = () => {
+    setTrainCfg(mpsTrainPreset());
+    setValSplit(0.2);
+    setKfoldSplits(5);
+    setArticlesJson(exampleArticlesJson);
+  };
+
+  const applyPipelinePreset = () => {
+    setProcessor("mps");
+    setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
+    setPipeBatchSize(4);
+    setPipeUseWikipedia(true);
+    setMode("full");
+    setPipeJson(examplePipelineArticlesJson);
   };
 
   return (
@@ -342,6 +377,14 @@ export function ProjectWorkspace() {
         <div className="toolbar" style={{ marginTop: "1rem" }}>
           <button
             type="button"
+            className="btn"
+            disabled={busy}
+            onClick={applyTrainPreset}
+          >
+            Apply MPS safe preset
+          </button>
+          <button
+            type="button"
             className="btn btn-primary"
             disabled={busy}
             onClick={() => train(false)}
@@ -431,6 +474,26 @@ export function ProjectWorkspace() {
               onChange={(e) => setNerModel(e.target.value)}
             />
           </div>
+          <div>
+            <label>Batch size</label>
+            <input
+              type="number"
+              min={1}
+              max={64}
+              value={pipeBatchSize}
+              onChange={(e) => setPipeBatchSize(parseInt(e.target.value, 10))}
+            />
+          </div>
+          <div>
+            <label>Wikipedia fallback</label>
+            <select
+              value={pipeUseWikipedia ? "on" : "off"}
+              onChange={(e) => setPipeUseWikipedia(e.target.value === "on")}
+            >
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </select>
+          </div>
         </div>
 
         <div style={{ marginTop: "1rem" }}>
@@ -454,6 +517,14 @@ export function ProjectWorkspace() {
         )}
 
         <div className="toolbar" style={{ marginTop: "1rem" }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={applyPipelinePreset}
+          >
+            Apply MPS safe preset
+          </button>
           <button
             type="button"
             className="btn btn-primary"
