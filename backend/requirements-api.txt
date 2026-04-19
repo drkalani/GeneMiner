@@ -1,0 +1,7 @@
+# API layer (install geneminer_platform from repo root: pip install -e ".[api]")
+# Or: pip install -r backend/requirements-api.txt after pip install -e .
+
+fastapi>=0.109
+uvicorn[standard]>=0.27
+python-multipart>=0.0.6
+pydantic-settings>=2.1
