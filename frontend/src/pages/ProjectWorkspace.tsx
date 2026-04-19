@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
   type Article,
+  type LastRunInfo,
   type PipelineMode,
   type Processor,
   type TrainingConfig,
@@ -43,6 +44,41 @@ const examplePipelineArticlesJson = `[
   {"pmid":"10000002","text":"Weather patterns in coastal regions unrelated to nephrology."}
 ]`;
 
+type ClassificationRow = {
+  pmid?: string;
+  text?: string;
+  relevant?: number;
+  relevance_prob?: number;
+};
+
+const toNumberOrNull = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const getClassificationRows = (
+  result: Record<string, unknown>
+): ClassificationRow[] => {
+  if (result.kind === "full") {
+    const fullRows = result.classification;
+    if (Array.isArray(fullRows)) {
+      return fullRows as ClassificationRow[];
+    }
+    return [];
+  }
+  if (result.kind === "classification") {
+    const rows = result.rows;
+    if (Array.isArray(rows)) {
+      return rows as ClassificationRow[];
+    }
+  }
+  return [];
+};
+
 export function ProjectWorkspace() {
   const { id } = useParams<{ id: string }>();
   const projectId = id ?? "";
@@ -65,12 +101,25 @@ export function ProjectWorkspace() {
   const [nerModel, setNerModel] = useState("pruas/BENT-PubMedBERT-NER-Gene");
   const [pipeBatchSize, setPipeBatchSize] = useState(4);
   const [pipeUseWikipedia, setPipeUseWikipedia] = useState(true);
+  const [relevanceThreshold, setRelevanceThreshold] = useState(0.5);
   const [pipeResult, setPipeResult] = useState<Record<string, unknown> | null>(
     null
   );
   const [normJson, setNormJson] = useState(
     `[{"pmid":"1","mention":"TGFB1","start":0,"end":5}]`
   );
+  const [lastRunInfo, setLastRunInfo] = useState<LastRunInfo | null>(null);
+  const trainFileRef = useRef<HTMLInputElement>(null);
+  const pipeFileRef = useRef<HTMLInputElement>(null);
+  const mentionFileRef = useRef<HTMLInputElement>(null);
+
+  const refreshLastRun = () => {
+    if (!projectId) return;
+    api
+      .lastRun(projectId)
+      .then(setLastRunInfo)
+      .catch(() => setLastRunInfo(null));
+  };
 
   const refreshModels = () => {
     if (!projectId) return;
@@ -93,6 +142,10 @@ export function ProjectWorkspace() {
 
   useEffect(() => {
     refreshModels();
+  }, [projectId]);
+
+  useEffect(() => {
+    refreshLastRun();
   }, [projectId]);
 
   useEffect(() => {
@@ -169,6 +222,7 @@ export function ProjectWorkspace() {
       }
       const out = await api.runPipeline(payload);
       setPipeResult(out);
+      refreshLastRun();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -183,14 +237,70 @@ export function ProjectWorkspace() {
     setArticlesJson(exampleArticlesJson);
   };
 
+  const onTrainFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f || !projectId) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.importArticles(projectId, f);
+      setArticlesJson(JSON.stringify(r.articles, null, 2));
+    } catch (err) {
+      setErr((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onPipeArticlesFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f || !projectId) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.importArticles(projectId, f);
+      setPipeJson(JSON.stringify(r.articles, null, 2));
+    } catch (err) {
+      setErr((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onMentionsFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f || !projectId) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.importMentions(projectId, f);
+      setNormJson(JSON.stringify(r.mentions, null, 2));
+    } catch (err) {
+      setErr((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const applyPipelinePreset = () => {
     setProcessor("mps");
     setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
     setPipeBatchSize(4);
     setPipeUseWikipedia(true);
     setMode("full");
+    setRelevanceThreshold(0.5);
     setPipeJson(examplePipelineArticlesJson);
   };
+
+  const classificationRows = pipeResult ? getClassificationRows(pipeResult) : [];
+  const filteredClassificationRows = classificationRows.filter((row) => {
+    const prob = toNumberOrNull(row.relevance_prob);
+    if (prob === null) return false;
+    return prob >= relevanceThreshold;
+  });
 
   return (
     <div>
@@ -224,6 +334,35 @@ export function ProjectWorkspace() {
           onChange={(e) => setArticlesJson(e.target.value)}
           style={{ minHeight: "160px", fontFamily: "JetBrains Mono, monospace" }}
         />
+        <input
+          ref={trainFileRef}
+          type="file"
+          accept=".csv,.xlsx,.xls,.pkl,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          style={{ display: "none" }}
+          onChange={onTrainFile}
+        />
+        <div className="toolbar" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => trainFileRef.current?.click()}
+          >
+            Import articles (CSV / Excel / PKL)
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              api
+                .downloadTemplate(projectId, "articles")
+                .catch((err) => setErr((err as Error).message))
+            }
+          >
+            Download template (CSV)
+          </button>
+        </div>
 
         <div className="grid2" style={{ marginTop: "1rem" }}>
           <div>
@@ -428,6 +567,52 @@ export function ProjectWorkspace() {
           step or full workflow, then run on new abstracts (labels optional for
           inference).
         </p>
+        <input
+          ref={pipeFileRef}
+          type="file"
+          accept=".csv,.xlsx,.xls,.pkl,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          style={{ display: "none" }}
+          onChange={onPipeArticlesFile}
+        />
+        <input
+          ref={mentionFileRef}
+          type="file"
+          accept=".csv,.xlsx,.xls,.pkl,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          style={{ display: "none" }}
+          onChange={onMentionsFile}
+        />
+        <div className="toolbar" style={{ marginTop: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => pipeFileRef.current?.click()}
+          >
+            Import articles file
+          </button>
+          {mode === "normalize" && (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => mentionFileRef.current?.click()}
+            >
+              Import mentions file
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              api
+                .downloadTemplate(projectId, "mentions")
+                .catch((err) => setErr((err as Error).message))
+            }
+          >
+            Mentions template (CSV)
+          </button>
+        </div>
         <div className="grid2">
           <div>
             <label>Trained model</label>
@@ -466,6 +651,21 @@ export function ProjectWorkspace() {
               <option value="mps">mps</option>
               <option value="cpu">cpu</option>
             </select>
+          </div>
+          <div>
+            <label>Relevance threshold (classification)</label>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={relevanceThreshold}
+              onChange={(e) => setRelevanceThreshold(parseFloat(e.target.value))}
+              disabled={mode === "ner" || mode === "normalize"}
+            />
+            <div className="tag" style={{ marginTop: "0.35rem" }}>
+              {relevanceThreshold.toFixed(2)}
+            </div>
           </div>
           <div>
             <label>NER model (Hugging Face id)</label>
@@ -535,10 +735,254 @@ export function ProjectWorkspace() {
           </button>
         </div>
 
+        {lastRunInfo && lastRunInfo.files.length > 0 && (
+          <div style={{ marginTop: "1rem" }}>
+            <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
+              Saved under <span className="mono">{lastRunInfo.path}</span>:{" "}
+              {lastRunInfo.files.join(", ")}
+            </p>
+            <p style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+              Export last run (CSV needs only that step; Excel/PKL per table).
+            </p>
+            <div
+              className="toolbar"
+              style={{ marginTop: "0.5rem", flexWrap: "wrap", gap: "0.5rem" }}
+            >
+              {lastRunInfo.files.includes("classification.csv") && (
+                <>
+                  <span className="tag">classification</span>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "classification",
+                          "csv",
+                          "classification.csv"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "classification",
+                          "xlsx",
+                          "classification.xlsx"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    Excel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "classification",
+                          "pkl",
+                          "classification.pkl"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    PKL
+                  </button>
+                </>
+              )}
+              {lastRunInfo.files.includes("mentions.csv") && (
+                <>
+                  <span className="tag">mentions</span>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "mentions",
+                          "csv",
+                          "mentions.csv"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "mentions",
+                          "xlsx",
+                          "mentions.xlsx"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    Excel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "mentions",
+                          "pkl",
+                          "mentions.pkl"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    PKL
+                  </button>
+                </>
+              )}
+              {lastRunInfo.files.includes("normalized.csv") && (
+                <>
+                  <span className="tag">normalized</span>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "normalized",
+                          "csv",
+                          "normalized.csv"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "normalized",
+                          "xlsx",
+                          "normalized.xlsx"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    Excel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() =>
+                      api
+                        .downloadExport(
+                          projectId,
+                          "normalized",
+                          "pkl",
+                          "normalized.pkl"
+                        )
+                        .catch((err) => setErr((err as Error).message))
+                    }
+                  >
+                    PKL
+                  </button>
+                </>
+              )}
+              <span className="tag">bundle</span>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() =>
+                  api
+                    .downloadExport(
+                      projectId,
+                      "bundle",
+                      "pkl",
+                      "geneminer_last_run_bundle.pkl"
+                    )
+                    .catch((err) => setErr((err as Error).message))
+                }
+              >
+                All tables PKL
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() =>
+                  api
+                    .downloadExport(
+                      projectId,
+                      "bundle",
+                      "xlsx",
+                      "geneminer_last_run_bundle.xlsx"
+                    )
+                    .catch((err) => setErr((err as Error).message))
+                }
+              >
+                All tables Excel
+              </button>
+            </div>
+          </div>
+        )}
+
         {pipeResult && (
           <div style={{ marginTop: "1rem" }}>
             <h4>Charts</h4>
             <ChartFromPayload pipeResult={pipeResult} />
+            {filteredClassificationRows.length > 0 && (
+              <div style={{ marginTop: "1rem" }}>
+                <h4>
+                  {`Classification rows filtered by probability (>= ${relevanceThreshold.toFixed(2)})`}
+                </h4>
+                <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
+                  {filteredClassificationRows.length} / {classificationRows.length}{" "}
+                  rows kept.
+                </p>
+                <pre
+                  className="mono"
+                  style={{
+                    padding: "0.75rem",
+                    background: "var(--bg)",
+                    borderRadius: 8,
+                    overflow: "auto",
+                    maxHeight: "240px",
+                    fontSize: "0.8rem",
+                  }}
+                >
+                  {JSON.stringify(filteredClassificationRows, null, 2)}
+                </pre>
+              </div>
+            )}
             <h4>Raw JSON</h4>
             <pre
               className="mono"

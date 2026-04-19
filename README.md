@@ -7,7 +7,10 @@ End-to-end system for **disease-agnostic** literature mining: train a **binary r
 - **Projects**: separate workspace per disease/study (`disease_key` is metadata; models are trained on *your* labels).
 - **Training**: holdout validation or **stratified k-fold**; choose **CUDA**, **Apple Metal (MPS)**, or **CPU**; tune LR, epochs, batch sizes, sequence length, FP16 (auto on CUDA by default).
 - **Pipeline**: run **classify only**, **NER only**, **normalize only**, or **full** workflow.
+- **Datasets**: import articles or mentions from **CSV / Excel / pickle**; export each step or a **bundle** (multi-sheet Excel or dict of DataFrames in PKL); CSV templates from the UI and API.
 - **REST API**: OpenAPI at `/docs` when the server is running.
+
+Pipeline runs write CSV snapshots under `data/projects/<id>/outputs/last_run/` (classification, mentions, normalized) so exports always have a stable on-disk source.
 
 ## Requirements
 
@@ -137,6 +140,13 @@ Importable Python package `geneminer_core` (installed with `pip install -e .`):
 | POST | `/train/{id}/relevance/kfold` | Start k-fold job |
 | GET | `/train/jobs/{job_id}` | Poll job status + metrics |
 | POST | `/pipeline/run` | Run classify / ner / normalize / full |
+| GET | `/projects/{id}/data/last-run` | List files in `outputs/last_run` |
+| POST | `/projects/{id}/data/import/articles` | `multipart/form-data` file → JSON articles |
+| POST | `/projects/{id}/data/import/mentions` | File → JSON mention rows (normalize step) |
+| GET | `/projects/{id}/data/export/{artifact}?format=` | `artifact` = `classification`, `mentions`, `normalized` (`csv` / `xlsx` / `pkl`) |
+| GET | `/projects/{id}/data/export/bundle?format=` | `pkl` or `xlsx` (all tables present on disk) |
+| GET | `/projects/{id}/data/templates/articles` | Download CSV column template |
+| GET | `/projects/{id}/data/templates/mentions` | Mentions CSV template |
 
 ## Notes
 

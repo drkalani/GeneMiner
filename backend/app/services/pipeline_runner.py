@@ -31,6 +31,8 @@ def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:
 
     rows = articles_to_rows(req.articles)
     mode = req.mode
+    out_dir = base / "outputs" / "last_run"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == "classify":
         df = run_classify_only(
@@ -39,7 +41,10 @@ def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:
             processor=req.processor,
             batch_size=req.batch_size,
         )
-        return _df_payload(df, "classification")
+        df.to_csv(out_dir / "classification.csv", index=False)
+        payload = _df_payload(df, "classification")
+        payload["saved_to"] = str(out_dir.relative_to(get_settings().data_dir))
+        return payload
 
     if mode == "ner":
         df = run_ner_only(
@@ -47,14 +52,20 @@ def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:
             ner_model=req.ner_model,
             processor=req.processor,
         )
-        return _df_payload(df, "ner")
+        df.to_csv(out_dir / "mentions.csv", index=False)
+        payload = _df_payload(df, "ner")
+        payload["saved_to"] = str(out_dir.relative_to(get_settings().data_dir))
+        return payload
 
     if mode == "normalize":
         if not req.mentions_json:
             raise ValueError("normalize mode requires mentions_json")
         mdf = pd.DataFrame(req.mentions_json)
         df = run_normalize_only(mdf)
-        return _df_payload(df, "normalized")
+        df.to_csv(out_dir / "normalized.csv", index=False)
+        payload = _df_payload(df, "normalized")
+        payload["saved_to"] = str(out_dir.relative_to(get_settings().data_dir))
+        return payload
 
     if mode == "full":
         cls_df, ner_df, norm_df = run_full_pipeline(
@@ -65,8 +76,6 @@ def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:
             batch_size=req.batch_size,
             use_wikipedia_fallback=req.use_wikipedia_fallback,
         )
-        out_dir = base / "outputs" / "last_run"
-        out_dir.mkdir(parents=True, exist_ok=True)
         cls_df.to_csv(out_dir / "classification.csv", index=False)
         ner_df.to_csv(out_dir / "mentions.csv", index=False)
         norm_df.to_csv(out_dir / "normalized.csv", index=False)
