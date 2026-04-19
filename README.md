@@ -78,6 +78,43 @@ Run this notebook on Google Colab to expose the backend using a free GPU:
 - It installs backend dependencies, starts FastAPI in background, and opens an ngrok tunnel.
 - Replace `REPO_URL` in the notebook with your own repository URL.
 
+### Docker deployment (recommended)
+
+Build and run both backend and frontend in containers:
+
+```bash
+docker compose up --build
+```
+
+Open:
+
+- App UI: [http://localhost](http://localhost)  (Nginx proxy on port 80)
+- API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Health check: [http://localhost:8000/health](http://localhost:8000/health)
+
+This compose stack:
+
+- Starts `backend` (FastAPI) on port `8000`.
+- Builds and serves `frontend` with Nginx.
+- Proxies API calls from the UI at `/api/*` to `backend:8000`.
+
+You can find deployment files here:
+
+- `backend/Dockerfile`
+- `frontend/Dockerfile`
+- `frontend/nginx.conf`
+- `docker-compose.yml`
+- `.dockerignore`
+
+If you want a custom API base at build time:
+
+```bash
+docker compose build --build-arg VITE_API_BASE=https://api.example.com frontend
+docker compose up frontend
+```
+
+Project artifacts are persisted with `./data:/app/data` in `docker-compose.yml`.
+
 ## Core library
 
 Importable Python package `geneminer_core` (installed with `pip install -e .`):
