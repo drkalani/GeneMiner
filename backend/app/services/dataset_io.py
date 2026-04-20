@@ -48,6 +48,28 @@ def _normalize_pmid_cell(value: Any) -> str:
     return s
 
 
+def _sanitize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df.columns = [
+        (str(c).strip().replace("\ufeff", "") if isinstance(c, str) else c)
+        for c in df.columns
+    ]
+    return df
+
+
+def _read_csv_fallback(path: Path) -> pd.DataFrame:
+    encodings = ("utf-8", "utf-8-sig", "latin-1", "cp1252")
+    last_err: Exception | None = None
+    for encoding in encodings:
+        try:
+            df = pd.read_csv(path, encoding=encoding)
+            return _sanitize_dataframe_columns(df)
+        except UnicodeDecodeError as e:  # pragma: no cover - tested by behavior
+            last_err = e
+    if last_err is not None:
+        raise ValueError(f"Unable to decode CSV file '{path.name}' with supported encodings.") from last_err
+    raise ValueError(f"Unable to load CSV file '{path.name}'.")
+
+
 def _first_matching_column(df: pd.DataFrame, candidates: Tuple[str, ...]) -> Optional[str]:
     lower_map = {c.lower(): c for c in df.columns}
     for cand in candidates:
@@ -59,11 +81,13 @@ def _first_matching_column(df: pd.DataFrame, candidates: Tuple[str, ...]) -> Opt
     return None
 
 
-def read_articles_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+def read_articles_from_path(path: Path) -> Tuple[
+    pd.DataFrame, List[Dict[str, Any]], Dict[str, int]
+]:
     """Load articles from .csv, .xlsx/.xls, or .pkl (DataFrame or list[dict])."""
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        df = pd.read_csv(path)
+        df = _read_csv_fallback(path)
     elif suffix in (".xlsx", ".xls"):
         df = pd.read_excel(path)
     elif suffix == ".pkl":
@@ -99,15 +123,39 @@ def read_articles_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, An
     col_label = _first_matching_column(df, _ARTICLE_LABEL)
 
     out_rows: List[Dict[str, Any]] = []
+    skipped_missing_pmid = 0
+    skipped_missing_content = 0
+    skipped_duplicates = 0
+    total_rows = len(df)
     seen_pmids: set[str] = set()
     for _, row in df.iterrows():
         pmid = _normalize_pmid_cell(row[col_pmid])
-        text = str(row[col_content]).strip()
-        if not pmid or not text:
+        if not pmid:
+            skipped_missing_pmid += 1
             continue
+        raw_text = row[col_content]
+        if pd.isna(raw_text) or str(raw_text).strip() == "":
+            raw_text = row[col_title] if col_title is not None else ""
+            if pd.isna(raw_text):
+                skipped_missing_content += 1
+                continue
+            raw_text = str(raw_text).strip()
+            if not raw_text:
+                skipped_missing_content += 1
+                continue
+        else:
+            raw_text = str(raw_text).strip()
+            if not raw_text:
+                skipped_missing_content += 1
+                continue
+
         if pmid in seen_pmids:
+            skipped_duplicates += 1
             continue
         seen_pmids.add(pmid)
+        text = raw_text.strip()
+        if not pmid or not text:
+            continue
         item: Dict[str, Any] = {"pmid": pmid, "text": text}
         if col_title is not None and pd.notna(row.get(col_title)):
             t = str(row[col_title]).strip()
@@ -123,15 +171,24 @@ def read_articles_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, An
     if not out_rows:
         raise ValueError("No valid article rows after parsing")
 
+    stats = {
+        "total_rows": total_rows,
+        "imported_rows": len(out_rows),
+        "skipped_rows": total_rows - len(out_rows),
+        "skipped_missing_pmid": skipped_missing_pmid,
+        "skipped_missing_text_or_title": skipped_missing_content,
+        "skipped_duplicates": skipped_duplicates,
+    }
+
     slim = pd.DataFrame(out_rows)
-    return slim, out_rows
+    return slim, out_rows, stats
 
 
 def read_mentions_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """Load mention rows for normalize step."""
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        df = pd.read_csv(path)
+        df = _read_csv_fallback(path)
     elif suffix in (".xlsx", ".xls"):
         df = pd.read_excel(path)
     elif suffix == ".pkl":
@@ -158,6 +215,8 @@ def read_mentions_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, An
 
     rows: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
+        if pd.isna(row[col_pmid]) or pd.isna(row[col_mention]):
+            continue
         rec: Dict[str, Any] = {
             "pmid": str(row[col_pmid]).strip(),
             "mention": str(row[col_mention]).strip(),
@@ -186,7 +245,7 @@ def read_litsuggest_scores_from_path(
     """Load LitSuggest-style CSV/XLSX/PKL: pmid + score column."""
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        df = pd.read_csv(path)
+        df = _read_csv_fallback(path)
     elif suffix in (".xlsx", ".xls"):
         df = pd.read_excel(path)
     elif suffix == ".pkl":

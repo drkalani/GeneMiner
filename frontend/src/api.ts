@@ -131,6 +131,26 @@ export interface JobRecord {
   result?: Record<string, unknown> | null;
 }
 
+export interface BaseModelCatalog {
+  models: string[];
+}
+
+export interface BaseModelDownloadResponse {
+  model_id: string;
+  downloaded: boolean;
+  status: string;
+  message: string;
+}
+
+export interface ProjectModelInfo {
+  model_id: string;
+  path: string;
+}
+
+export interface ProjectModelCatalog {
+  models: ProjectModelInfo[];
+}
+
 export interface LastRunInfo {
   path: string | null;
   files: string[];
@@ -164,6 +184,15 @@ export interface Article {
   label?: number | null;
 }
 
+export interface ImportStats {
+  total_rows: number;
+  imported_rows: number;
+  skipped_rows: number;
+  skipped_missing_pmid: number;
+  skipped_missing_text_or_title: number;
+  skipped_duplicates: number;
+}
+
 export const api = {
   health: () => request<{ status: string }>("/health"),
 
@@ -184,6 +213,9 @@ export const api = {
 
   listModels: (projectId: string) =>
     request<{ models: string[] }>(`/projects/${projectId}/models`),
+
+  listProjectModelCatalog: (projectId: string) =>
+    request<ProjectModelCatalog>(`/projects/${projectId}/models/catalog`),
 
   trainRelevance: (
     projectId: string,
@@ -250,6 +282,7 @@ export const api = {
       kind: string;
       row_count: number;
       articles: Article[];
+      import_stats?: ImportStats;
     }>;
   },
 
@@ -284,6 +317,15 @@ export const api = {
       `/projects/${projectId}/data/templates/${kind}`,
       kind === "articles" ? "articles_template.csv" : "mentions_template.csv"
     ),
+
+  listBaseModels: () => request<BaseModelCatalog>("/models/base"),
+
+  downloadBaseModel: (modelId: string) =>
+    request<BaseModelDownloadResponse>("/models/base/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: modelId }),
+    }),
 
   runPipeline: (body: {
     project_id: string;

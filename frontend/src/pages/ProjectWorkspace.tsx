@@ -4,7 +4,9 @@ import {
   api,
   type Article,
   type LastRunInfo,
+  type ImportStats,
   type DeviceInfo,
+  type ProjectModelCatalog,
   type PipelineMode,
   type Processor,
   type TrainingConfig,
@@ -76,6 +78,21 @@ const toNumberOrNull = (value: unknown): number | null => {
   return null;
 };
 
+const toPercentOrNull = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = value <= 1 ? value * 100 : value;
+    return Math.max(0, Math.min(100, normalized));
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      const normalized = parsed <= 1 ? parsed * 100 : parsed;
+      return Math.max(0, Math.min(100, normalized));
+    }
+  }
+  return null;
+};
+
 const getClassificationRows = (
   result: Record<string, unknown>
 ): ClassificationRow[] => {
@@ -95,11 +112,37 @@ const getClassificationRows = (
   return [];
 };
 
+const formatImportNotice = (label: string, stats?: ImportStats | null) => {
+  if (!stats) {
+    return `${label}: import complete.`;
+  }
+  if (stats.imported_rows === 0) {
+    return `${label}: no valid rows imported.`;
+  }
+  const bits = [`${stats.imported_rows} imported from ${stats.total_rows} rows`];
+  const skipped: string[] = [];
+  if (stats.skipped_missing_pmid > 0) {
+    skipped.push(`${stats.skipped_missing_pmid} missing PMID`);
+  }
+  if (stats.skipped_missing_text_or_title > 0) {
+    skipped.push(`${stats.skipped_missing_text_or_title} missing title/text`);
+  }
+  if (stats.skipped_duplicates > 0) {
+    skipped.push(`${stats.skipped_duplicates} duplicates`);
+  }
+  if (skipped.length) {
+    bits.push(`skipped: ${skipped.join(", ")}`);
+  }
+  return `${label}: ${bits.join(" · ")}`;
+};
+
 export function ProjectWorkspace() {
   const { id } = useParams<{ id: string }>();
   const projectId = id ?? "";
 
   const [models, setModels] = useState<string[]>([]);
+  const [projectModels, setProjectModels] = useState<ProjectModelCatalog["models"]>([]);
+  const [availableBaseModels, setAvailableBaseModels] = useState<string[]>([]);
   const [devices, setDevices] = useState<string | null>(null);
   const [trainCfg, setTrainCfg] = useState<TrainingConfig>(defaultTrainConfig);
   const [valSplit, setValSplit] = useState(0.2);
@@ -120,12 +163,16 @@ export function ProjectWorkspace() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobPoll, setJobPoll] = useState<unknown>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState<string | null>(null);
+  const [isDownloadingBaseModel, setIsDownloadingBaseModel] = useState(false);
+  const [baseModelToDownload, setBaseModelToDownload] = useState("");
   const [activeStep, setActiveStep] = useState<WorkspaceStep>("backend");
 
   const [modelId, setModelId] = useState("");
   const [mode, setMode] = useState<PipelineMode>("full");
-  const [pipeJson, setPipeJson] = useState(exampleArticlesJson);
+  const [pipeJson, setPipeJson] = useState(examplePipelineArticlesJson);
   const [processor, setProcessor] = useState<Processor>("auto");
   const [nerModel, setNerModel] = useState("pruas/BENT-PubMedBERT-NER-Gene");
   const [pipeBatchSize, setPipeBatchSize] = useState(4);
@@ -181,12 +228,38 @@ export function ProjectWorkspace() {
 
   const refreshModels = () => {
     if (!projectId) return;
-    api.listModels(projectId).then((r) => {
-      setModels(r.models);
-      if (r.models.length && !modelId) {
-        setModelId(r.models[r.models.length - 1]!);
-      }
-    });
+    api
+      .listProjectModelCatalog(projectId)
+      .then((r) => {
+        setProjectModels(r.models);
+        const names = r.models.map((m) => m.model_id);
+        setModels(names);
+        if (names.length && !modelId) {
+          setModelId(names[names.length - 1]!);
+        }
+      })
+      .catch(() => {
+        api.listModels(projectId).then((r) => {
+          const names = r.models;
+          setModels(names);
+          setProjectModels(names.map((model_id) => ({ model_id, path: "" })));
+          if (names.length && !modelId) {
+            setModelId(names[names.length - 1]!);
+          }
+        }).catch(() => {
+          setModels([]);
+          setProjectModels([]);
+        });
+      });
+  };
+
+  const refreshBaseModels = async () => {
+    try {
+      const result = await api.listBaseModels();
+      setAvailableBaseModels(result.models);
+    } catch {
+      setAvailableBaseModels([]);
+    }
   };
 
   useEffect(() => {
@@ -238,9 +311,47 @@ export function ProjectWorkspace() {
     });
   };
 
+  const jobState = (() => {
+    if (typeof jobPoll !== "object" || jobPoll === null) return "";
+    if (!("state" in jobPoll)) return "";
+    const rawState = (jobPoll as { state?: unknown }).state;
+    return typeof rawState === "string" ? rawState.toLowerCase() : "";
+  })();
+
+  const jobProgressPercent = (() => {
+    if (typeof jobPoll !== "object" || jobPoll === null) return null;
+    if (!("progress" in jobPoll)) return null;
+    return toPercentOrNull((jobPoll as { progress?: unknown }).progress);
+  })();
+
+  const isJobRunning = Boolean(
+    jobId &&
+      (jobState === "running" ||
+        jobState === "queued" ||
+        jobState === "in_progress" ||
+        jobState === "starting" ||
+        jobState === "started" ||
+        jobState === "pending")
+  );
+
+  const globalLoadingMessage = (() => {
+    if (backendStatus === "checking") return "Checking backend...";
+    if (backendDevicesStatus === "checking") return "Running backend system check...";
+    if (isDownloadingBaseModel) return "Downloading base model...";
+    if (pubmedBusy) return "Fetching PubMed data...";
+    if (compareBusy) return "Running LitSuggest comparison...";
+    if (busy && busyMessage) return busyMessage;
+    if (isJobRunning) return `Training job ${jobId}: ${jobState || "running"}`;
+    if (busy) return "Working...";
+    return null;
+  })();
+
+  const globalLoadingPercent = isJobRunning ? jobProgressPercent : null;
+
   const train = async (kfold: boolean) => {
     setErr(null);
     setBusy(true);
+    setBusyMessage(kfold ? "Submitting k-fold training job..." : "Submitting training job...");
     try {
       const articles = parseArticles();
       const cfg = { ...trainCfg, n_splits: kfoldSplits };
@@ -253,12 +364,14 @@ export function ProjectWorkspace() {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+      setBusyMessage(null);
     }
   };
 
   const runPipe = async () => {
     setErr(null);
     setBusy(true);
+    setBusyMessage("Running pipeline jobs...");
     setPipeResult(null);
     try {
       const articles = JSON.parse(pipeJson) as Article[];
@@ -301,6 +414,7 @@ export function ProjectWorkspace() {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+      setBusyMessage(null);
     }
   };
 
@@ -385,7 +499,6 @@ export function ProjectWorkspace() {
     setTrainCfg(mpsTrainPreset());
     setValSplit(0.2);
     setKfoldSplits(5);
-    setArticlesJson(exampleArticlesJson);
   };
 
   const onTrainFile = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -393,14 +506,18 @@ export function ProjectWorkspace() {
     e.target.value = "";
     if (!f || !projectId) return;
     setBusy(true);
+    setBusyMessage("Importing training file...");
     setErr(null);
+    setImportNotice(null);
     try {
       const r = await api.importArticles(projectId, f);
       setArticlesJson(JSON.stringify(r.articles, null, 2));
+      setImportNotice(formatImportNotice("Train import", r.import_stats));
     } catch (err) {
       setErr((err as Error).message);
     } finally {
       setBusy(false);
+      setBusyMessage(null);
     }
   };
 
@@ -409,14 +526,18 @@ export function ProjectWorkspace() {
     e.target.value = "";
     if (!f || !projectId) return;
     setBusy(true);
+    setBusyMessage("Importing pipeline file...");
     setErr(null);
+    setImportNotice(null);
     try {
       const r = await api.importArticles(projectId, f);
       setPipeJson(JSON.stringify(r.articles, null, 2));
+      setImportNotice(formatImportNotice("Pipeline import", r.import_stats));
     } catch (err) {
       setErr((err as Error).message);
     } finally {
       setBusy(false);
+      setBusyMessage(null);
     }
   };
 
@@ -425,6 +546,7 @@ export function ProjectWorkspace() {
     e.target.value = "";
     if (!f || !projectId) return;
     setBusy(true);
+    setBusyMessage("Importing mentions file...");
     setErr(null);
     try {
       const r = await api.importMentions(projectId, f);
@@ -433,6 +555,34 @@ export function ProjectWorkspace() {
       setErr((err as Error).message);
     } finally {
       setBusy(false);
+      setBusyMessage(null);
+    }
+  };
+
+  const downloadBaseModel = async () => {
+    const modelIdTrimmed = baseModelToDownload.trim();
+    if (!modelIdTrimmed) {
+      setErr("Enter a model id before downloading.");
+      return;
+    }
+    if (availableBaseModels.includes(modelIdTrimmed)) {
+      setTrainCfg((cfg) => ({ ...cfg, base_model: modelIdTrimmed }));
+      setBaseModelToDownload("");
+      return;
+    }
+    setIsDownloadingBaseModel(true);
+    setErr(null);
+    setBusyMessage(`Downloading model: ${modelIdTrimmed}`);
+    try {
+      const result = await api.downloadBaseModel(modelIdTrimmed);
+      setTrainCfg((cfg) => ({ ...cfg, base_model: result.model_id }));
+      setBaseModelToDownload("");
+      await refreshBaseModels();
+    } catch (err) {
+      setErr((err as Error).message);
+    } finally {
+      setIsDownloadingBaseModel(false);
+      setBusyMessage(null);
     }
   };
 
@@ -450,12 +600,15 @@ export function ProjectWorkspace() {
         "Backend connected. Run system check, then start training or pipeline."
       );
       setErr(null);
+      void refreshBaseModels();
+      void refreshModels();
     } catch (err) {
       setBackendStatus("failed");
       setBackendStatusText((err as Error).message || "Unable to connect");
       setBackendMessage("Save backend URL here and click save, then retry the check.");
       setBackendDevicesStatus("pending");
       setBackendDevices(null);
+      setAvailableBaseModels([]);
     }
   };
 
@@ -490,7 +643,6 @@ export function ProjectWorkspace() {
     setPipeUseWikipedia(true);
     setMode("full");
     setRelevanceThreshold(0.5);
-    setPipeJson(examplePipelineArticlesJson);
   };
 
   const classificationRows = pipeResult ? getClassificationRows(pipeResult) : [];
@@ -610,9 +762,48 @@ export function ProjectWorkspace() {
         <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>{devices}</p>
       )}
 
+      {globalLoadingMessage && (
+        <div className="card" style={{ borderColor: "var(--accent)" }}>
+          <div className="loading-inline" role="status" aria-live="polite">
+            <span className="loading-spinner" aria-hidden="true" />
+            <span className="mono">
+              {globalLoadingMessage}
+              {globalLoadingPercent !== null ? ` · ${Math.round(globalLoadingPercent)}%` : ""}
+            </span>
+          </div>
+          <div className="loading-track">
+            <div
+              className={`loading-fill ${
+                globalLoadingPercent !== null
+                  ? "loading-fill-determinate"
+                  : "loading-fill-indeterminate"
+              }`}
+              style={
+                globalLoadingPercent !== null
+                  ? { width: `${Math.max(4, globalLoadingPercent)}%` }
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+      )}
+
       {err && (
         <div className="card" style={{ borderColor: "var(--danger)" }}>
           {err}
+        </div>
+      )}
+      {importNotice && (
+        <div
+          className="card"
+          style={{
+            borderColor:
+              importNotice.includes("skipped:") || importNotice.includes("no valid")
+                ? "var(--warning)"
+                : "var(--success)",
+          }}
+        >
+          {importNotice}
         </div>
       )}
 
@@ -680,12 +871,46 @@ export function ProjectWorkspace() {
           </div>
           <div>
             <label>Base model</label>
-            <input
-              value={trainCfg.base_model}
-              onChange={(e) =>
-                setTrainCfg({ ...trainCfg, base_model: e.target.value })
-              }
-            />
+            <div className="toolbar" style={{ marginTop: "0.15rem" }}>
+              <select
+                value={trainCfg.base_model}
+                onChange={(e) =>
+                  setTrainCfg({ ...trainCfg, base_model: e.target.value })
+                }
+              >
+                {availableBaseModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+                {!availableBaseModels.includes(trainCfg.base_model) && (
+                  <option value={trainCfg.base_model}>{`${trainCfg.base_model} (custom)`}</option>
+                )}
+              </select>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !isBackendConnected}
+                onClick={() => void refreshBaseModels()}
+              >
+                Refresh
+              </button>
+            </div>
+            <div className="toolbar" style={{ marginTop: "0.6rem" }}>
+              <input
+                value={baseModelToDownload}
+                onChange={(e) => setBaseModelToDownload(e.target.value)}
+                placeholder="Type HF model id, e.g. dmis-lab/biobert-v1.1"
+              />
+              <button
+                type="button"
+                className="btn"
+                disabled={!isBackendConnected || isDownloadingBaseModel || !baseModelToDownload.trim()}
+                onClick={() => void downloadBaseModel()}
+              >
+                {isDownloadingBaseModel ? "Downloading..." : "Download model"}
+              </button>
+            </div>
           </div>
           <div>
             <label>Learning rate</label>
@@ -1109,6 +1334,39 @@ export function ProjectWorkspace() {
               ))}
             </select>
           </div>
+          {projectModels.length > 0 && (
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Available trained model folders (absolute paths)</label>
+              <div style={{ marginTop: "0.5rem", display: "grid", gap: "0.4rem" }}>
+                {projectModels.map((m) => (
+                  <div
+                    key={m.model_id}
+                    style={{
+                      background: "var(--bg)",
+                      borderRadius: 8,
+                      border: "1px solid var(--border)",
+                      padding: "0.5rem 0.6rem",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontFamily: "JetBrains Mono, monospace" }}>
+                      {m.model_id}
+                    </div>
+                    <div
+                      className="mono"
+                      style={{
+                        color: "var(--muted)",
+                        fontSize: "0.78rem",
+                        wordBreak: "break-all",
+                        marginTop: "0.1rem",
+                      }}
+                    >
+                      {m.path || "Path not available (legacy endpoint)"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <label>Mode</label>
             <select

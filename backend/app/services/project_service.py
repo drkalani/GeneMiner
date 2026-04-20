@@ -63,6 +63,23 @@ def list_models(project_id: str) -> List[str]:
     return sorted([d.name for d in mdir.iterdir() if d.is_dir()])
 
 
+def list_model_catalog(project_id: str) -> List[Dict[str, str]]:
+    mdir = project_dir(project_id) / "models"
+    if not mdir.exists():
+        return []
+    out: List[Dict[str, str]] = []
+    for entry in sorted(mdir.iterdir(), key=lambda p: p.name):
+        if not entry.is_dir():
+            continue
+        out.append(
+            {
+                "model_id": entry.name,
+                "path": str(entry.resolve()),
+            }
+        )
+    return out
+
+
 def delete_project(project_id: str) -> bool:
     p = project_dir(project_id)
     if not p.exists():

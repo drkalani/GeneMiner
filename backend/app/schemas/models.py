@@ -97,6 +97,19 @@ class DeviceInfo(BaseModel):
     recommended: str
 
 
+class BaseModelDownloadRequest(BaseModel):
+    model_id: str = Field(..., min_length=1, description="Hugging Face model id")
+
+
+class ProjectModelInfo(BaseModel):
+    model_id: str
+    path: str
+
+
+class ProjectModelCatalog(BaseModel):
+    models: List[ProjectModelInfo]
+
+
 class PubMedFetchRequest(BaseModel):
     """NCBI E-utilities require a valid email (https://www.ncbi.nlm.nih.gov/books/NBK25497/)."""
 

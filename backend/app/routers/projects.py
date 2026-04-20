@@ -6,7 +6,11 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.models import ProjectCreate, ProjectOut
+from app.schemas.models import (
+    ProjectCreate,
+    ProjectModelCatalog,
+    ProjectOut,
+)
 from app.services import project_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -46,3 +50,10 @@ def list_models(project_id: str) -> dict:
     if not project_service.get_project(project_id):
         raise HTTPException(404, "Project not found")
     return {"models": project_service.list_models(project_id)}
+
+
+@router.get("/{project_id}/models/catalog", response_model=ProjectModelCatalog)
+def list_model_catalog(project_id: str) -> ProjectModelCatalog:
+    if not project_service.get_project(project_id):
+        raise HTTPException(404, "Project not found")
+    return ProjectModelCatalog(models=project_service.list_model_catalog(project_id))

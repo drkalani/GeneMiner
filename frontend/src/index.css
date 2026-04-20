@@ -200,3 +200,60 @@ textarea {
   color: var(--muted);
   white-space: nowrap;
 }
+
+.loading-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.loading-track {
+  margin-top: 0.6rem;
+  height: 8px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface2);
+}
+
+.loading-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #34d399);
+}
+
+.loading-fill-determinate {
+  transition: width 0.3s ease;
+}
+
+.loading-fill-indeterminate {
+  width: 28%;
+  animation: workspace-loading 1.1s ease-in-out infinite;
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(232, 238, 246, 0.35);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: workspace-spin 0.8s linear infinite;
+}
+
+@keyframes workspace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes workspace-loading {
+  0% {
+    transform: translateX(-150%);
+  }
+
+  100% {
+    transform: translateX(500%);
+  }
+}

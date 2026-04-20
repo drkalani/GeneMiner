@@ -53,12 +53,17 @@ async def import_articles(project_id: str, file: UploadFile = File(...)) -> dict
         raise HTTPException(404, "Project not found")
     path = await _save_upload_temp(file)
     try:
-        _df, rows = dataset_io.read_articles_from_path(path)
+        _df, rows, stats = dataset_io.read_articles_from_path(path)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     finally:
         path.unlink(missing_ok=True)
-    return {"kind": "articles", "row_count": len(rows), "articles": rows}
+    return {
+        "kind": "articles",
+        "row_count": len(rows),
+        "articles": rows,
+        "import_stats": stats,
+    }
 
 
 @router.post("/{project_id}/data/import/mentions")

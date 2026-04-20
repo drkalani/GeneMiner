@@ -22,12 +22,15 @@ class TestReadArticles(unittest.TestCase):
             tmp.write(csv)
             p = Path(tmp.name)
         try:
-            _df, rows = read_articles_from_path(p)
+            _df, rows, stats = read_articles_from_path(p)
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["pmid"], "1")
             self.assertEqual(rows[0]["title"], "My title")
             self.assertEqual(rows[0]["text"], "Abstract body one")
             self.assertEqual(rows[0]["label"], 1)
+            self.assertEqual(stats["total_rows"], 2)
+            self.assertEqual(stats["imported_rows"], 2)
+            self.assertEqual(stats["skipped_rows"], 0)
         finally:
             p.unlink(missing_ok=True)
 
@@ -41,10 +44,37 @@ class TestReadArticles(unittest.TestCase):
             tmp.write(csv)
             p = Path(tmp.name)
         try:
-            _df, rows = read_articles_from_path(p)
+            _df, rows, stats = read_articles_from_path(p)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["text"], "First")
             self.assertEqual(rows[0]["label"], 1)
+            self.assertEqual(stats["skipped_rows"], 1)
+            self.assertEqual(stats["skipped_duplicates"], 1)
+        finally:
+            p.unlink(missing_ok=True)
+
+    def test_title_fallback_for_missing_text(self) -> None:
+        from app.services.dataset_io import read_articles_from_path
+
+        csv = (
+            "pmid,title,abstract,label\n"
+            "1,Title only one,,1\n"
+            "2,,Abstract present,0\n"
+            "3,No title and no text,,1\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(csv)
+            p = Path(tmp.name)
+        try:
+            _df, rows, stats = read_articles_from_path(p)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["text"], "Title only one")
+            self.assertEqual(rows[1]["text"], "Abstract present")
+            self.assertEqual(stats["imported_rows"], 2)
+            self.assertEqual(stats["skipped_rows"], 1)
+            self.assertEqual(stats["skipped_missing_text_or_title"], 1)
         finally:
             p.unlink(missing_ok=True)
 
