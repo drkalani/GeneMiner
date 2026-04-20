@@ -71,12 +71,14 @@ class JobStatus(BaseModel):
     job_id: str
     state: Literal["queued", "running", "completed", "failed"]
     message: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    progress: Optional[float] = None
     result: Optional[Dict[str, Any]] = None
 
 
 class JobSummary(JobStatus):
     project_id: Optional[str] = None
-    created_at: str = ""
 
 
 class PipelineRunRequest(BaseModel):
@@ -99,6 +101,17 @@ class DeviceInfo(BaseModel):
 
 class BaseModelDownloadRequest(BaseModel):
     model_id: str = Field(..., min_length=1, description="Hugging Face model id")
+
+
+ModelTaskKind = Literal["classification", "token_classification"]
+
+
+class ModelCompatibilityResult(BaseModel):
+    model_id: str
+    expected_task: ModelTaskKind
+    compatible: bool
+    detected_tasks: List[str]
+    message: str
 
 
 class ProjectModelInfo(BaseModel):

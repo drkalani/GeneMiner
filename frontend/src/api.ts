@@ -128,6 +128,8 @@ export interface JobRecord {
   message: string;
   project_id: string | null;
   created_at: string;
+  updated_at: string;
+  progress?: number | null;
   result?: Record<string, unknown> | null;
 }
 
@@ -139,6 +141,14 @@ export interface BaseModelDownloadResponse {
   model_id: string;
   downloaded: boolean;
   status: string;
+  message: string;
+}
+
+export interface ModelCompatibilityResult {
+  model_id: string;
+  expected_task: "classification" | "token_classification";
+  compatible: boolean;
+  detected_tasks: string[];
   message: string;
 }
 
@@ -249,6 +259,9 @@ export const api = {
       job_id: string;
       state: string;
       message: string;
+      created_at: string;
+      updated_at: string;
+      progress?: number | null;
       result: unknown;
     }>(`/train/jobs/${jobId}`),
 
@@ -326,6 +339,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model_id: modelId }),
     }),
+
+  validateModelTask: (
+    modelId: string,
+    expectedTask: "classification" | "token_classification"
+  ) => {
+    const p = new URLSearchParams({ model_id: modelId, expected_task: expectedTask });
+    return request<ModelCompatibilityResult>(`/models/validate?${p.toString()}`);
+  },
 
   runPipeline: (body: {
     project_id: string;

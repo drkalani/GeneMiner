@@ -11,8 +11,11 @@ from pydantic import BaseModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from fastapi import APIRouter, HTTPException
+from fastapi import Query
 
 from app.schemas.models import BaseModelDownloadRequest, DeviceInfo
+from app.schemas.models import ModelCompatibilityResult, ModelTaskKind
+from app.services.model_validation import as_result
 
 
 class _BaseModelDownloadResponse(BaseModel):
@@ -135,3 +138,16 @@ def download_base_model(payload: BaseModelDownloadRequest) -> _BaseModelDownload
         status=status,
         message=message,
     )
+
+
+@router.get("/models/validate", response_model=ModelCompatibilityResult)
+def validate_model(
+    model_id: str,
+    expected_task: ModelTaskKind = Query(
+        ...,
+        description="Expected task for compatibility check",
+    ),
+) -> ModelCompatibilityResult:
+    if not model_id.strip():
+        raise HTTPException(400, "Model id is required")
+    return as_result(model_id, expected_task)

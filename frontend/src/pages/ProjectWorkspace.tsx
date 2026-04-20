@@ -7,6 +7,7 @@ import {
   type ImportStats,
   type DeviceInfo,
   type ProjectModelCatalog,
+  type ModelCompatibilityResult,
   type PipelineMode,
   type Processor,
   type TrainingConfig,
@@ -60,6 +61,14 @@ const exampleCompareLitSuggest = `[
   {"pmid":"10000002","score":0.31}
 ]`;
 
+type ModelCheckState = {
+  modelId: string;
+  checking: boolean;
+  compatible: boolean | null;
+  detectedTasks: string[];
+  message: string;
+};
+
 type ClassificationRow = {
   pmid?: string;
   text?: string;
@@ -68,6 +77,8 @@ type ClassificationRow = {
 };
 
 type WorkspaceStep = "backend" | "train" | "integrations" | "pipeline";
+
+const makeProjectJobStateKey = (projectId: string) => `geneminer-job-state:${projectId}`;
 
 const toNumberOrNull = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -91,6 +102,47 @@ const toPercentOrNull = (value: unknown): number | null => {
     }
   }
   return null;
+};
+
+const isJobStateRunning = (state: unknown): boolean => {
+  if (typeof state !== "string") return false;
+  const normalized = state.toLowerCase();
+  return (
+    normalized === "running" ||
+    normalized === "queued" ||
+    normalized === "pending" ||
+    normalized === "starting" ||
+    normalized === "started" ||
+    normalized === "in_progress"
+  );
+};
+
+const isJobStateTerminal = (state: unknown): boolean => {
+  if (typeof state !== "string") return false;
+  const normalized = state.toLowerCase();
+  return normalized === "completed" || normalized === "failed";
+};
+
+const toEpochMsOrNull = (value: unknown): number | null => {
+  if (typeof value !== "string" || !value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const formatSecondsAsHuman = (seconds: number): string => {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0s";
+  const rounded = Math.round(seconds);
+  const h = Math.floor(rounded / 3600);
+  const m = Math.floor((rounded % 3600) / 60);
+  const s = rounded % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+};
+
+const jobStateText = (state: string) => {
+  if (!state) return "running";
+  return state;
 };
 
 const getClassificationRows = (
@@ -209,8 +261,267 @@ export function ProjectWorkspace() {
   const [compareThreshold, setCompareThreshold] = useState(0.5);
   const [compareResult, setCompareResult] = useState<Record<string, unknown> | null>(null);
   const [compareBusy, setCompareBusy] = useState(false);
+  const [baseModelCheck, setBaseModelCheck] = useState<ModelCheckState>({
+    modelId: "",
+    checking: false,
+    compatible: null,
+    detectedTasks: [],
+    message: "Not checked",
+  });
+  const [nerModelCheck, setNerModelCheck] = useState<ModelCheckState>({
+    modelId: "",
+    checking: false,
+    compatible: null,
+    detectedTasks: [],
+    message: "Not checked",
+  });
 
   const isBackendConnected = backendStatus === "connected";
+  const rememberRunningJob = (nextJobId: string | null) => {
+    if (!projectId) return;
+    const key = makeProjectJobStateKey(projectId);
+    if (nextJobId) {
+      localStorage.setItem(key, nextJobId);
+    } else {
+      localStorage.removeItem(key);
+    }
+    setJobId(nextJobId);
+  };
+
+  const checkBaseModelCompatibility = async (
+    modelId = trainCfg.base_model,
+    force = false
+  ): Promise<ModelCompatibilityResult | null> => {
+    const modelIdTrimmed = modelId.trim();
+    if (!isBackendConnected) {
+      setBaseModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: null,
+        detectedTasks: [],
+        message: "Backend not connected; validation unavailable.",
+      });
+      return null;
+    }
+    if (!modelIdTrimmed) {
+      setBaseModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: false,
+        detectedTasks: [],
+        message: "Base model is required.",
+      });
+      return null;
+    }
+
+    if (!force && baseModelCheck.modelId === modelIdTrimmed && baseModelCheck.compatible !== null) {
+      return {
+        model_id: baseModelCheck.modelId,
+        expected_task: "classification",
+        compatible: baseModelCheck.compatible,
+        detected_tasks: baseModelCheck.detectedTasks,
+        message: baseModelCheck.message,
+      };
+    }
+
+    setBaseModelCheck((prev) => ({
+      ...prev,
+      modelId: modelIdTrimmed,
+      checking: true,
+      message: `Checking ${modelIdTrimmed} for classification compatibility...`,
+    }));
+    try {
+      const check = await api.validateModelTask(modelIdTrimmed, "classification");
+      setBaseModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: check.compatible,
+        detectedTasks: check.detected_tasks,
+        message: check.message,
+      });
+      return check;
+    } catch (err) {
+      const message = `Validation failed: ${(err as Error).message}`;
+      setBaseModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: false,
+        detectedTasks: [],
+        message,
+      });
+      return null;
+    }
+  };
+
+  const checkNerModelCompatibility = async (
+    modelId = nerModel,
+    force = false
+  ): Promise<ModelCompatibilityResult | null> => {
+    const modelIdTrimmed = modelId.trim();
+    if (!isBackendConnected) {
+      setNerModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: null,
+        detectedTasks: [],
+        message: "Backend not connected; validation unavailable.",
+      });
+      return null;
+    }
+    if (!modelIdTrimmed) {
+      setNerModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: false,
+        detectedTasks: [],
+        message: "NER model is required.",
+      });
+      return null;
+    }
+
+    if (!force && nerModelCheck.modelId === modelIdTrimmed && nerModelCheck.compatible !== null) {
+      return {
+        model_id: nerModelCheck.modelId,
+        expected_task: "token_classification",
+        compatible: nerModelCheck.compatible,
+        detected_tasks: nerModelCheck.detectedTasks,
+        message: nerModelCheck.message,
+      };
+    }
+
+    setNerModelCheck((prev) => ({
+      ...prev,
+      modelId: modelIdTrimmed,
+      checking: true,
+      message: `Checking ${modelIdTrimmed} for token-classification compatibility...`,
+    }));
+    try {
+      const check = await api.validateModelTask(modelIdTrimmed, "token_classification");
+      setNerModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: check.compatible,
+        detectedTasks: check.detected_tasks,
+        message: check.message,
+      });
+      return check;
+    } catch (err) {
+      const message = `Validation failed: ${(err as Error).message}`;
+      setNerModelCheck({
+        modelId: modelIdTrimmed,
+        checking: false,
+        compatible: false,
+        detectedTasks: [],
+        message,
+      });
+      return null;
+    }
+  };
+
+  const validateBaseModelBeforeTrain = async (): Promise<boolean> => {
+    const check = await checkBaseModelCompatibility(trainCfg.base_model, true);
+    if (!check) {
+      setErr("Base model check failed.");
+      return false;
+    }
+    if (!check.compatible) {
+      setErr(`Base model check failed: ${check.message}`);
+      return false;
+    }
+    return true;
+  };
+
+  const validateNerModelForPipeline = async (): Promise<boolean> => {
+    const check = await checkNerModelCompatibility(nerModel, true);
+    if (!check) {
+      setErr("NER model check failed.");
+      return false;
+    }
+    if (!check.compatible) {
+      setErr(`NER model check failed: ${check.message}`);
+      return false;
+    }
+    return true;
+  };
+
+  const restoreRunningJob = async () => {
+    if (!projectId || !isBackendConnected) return;
+    const key = makeProjectJobStateKey(projectId);
+    try {
+      const recent = await api.listJobs(projectId, 20);
+      const runningJob = recent.find((j) => isJobStateRunning(j.state));
+      const jobToCheck = runningJob?.job_id || localStorage.getItem(key);
+      if (!jobToCheck) return;
+      const status = await api.jobStatus(jobToCheck);
+      setJobPoll(status);
+      rememberRunningJob(status.job_id);
+      if (!isJobStateRunning((status as { state?: unknown }).state)) {
+        if (isJobStateTerminal((status as { state?: unknown }).state)) {
+          rememberRunningJob(null);
+        }
+      }
+    } catch {
+      localStorage.removeItem(key);
+      setJobPoll(null);
+      rememberRunningJob(null);
+    }
+  };
+
+  const renderModelCheckTag = (label: string, check: ModelCheckState) => {
+    if (check.checking) {
+      return (
+        <div className="tag" style={{ marginTop: "0.35rem" }}>
+          {label}: checking...
+        </div>
+      );
+    }
+
+    if (check.compatible === null) {
+      return (
+        <div className="tag" style={{ marginTop: "0.35rem", opacity: 0.8 }}>
+          {label}: not checked
+        </div>
+      );
+    }
+
+    if (check.compatible) {
+      return (
+        <div
+          className="tag"
+          style={{ marginTop: "0.35rem", color: "var(--success)" }}
+        >
+          {label}: compatible
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className="tag"
+        style={{ marginTop: "0.35rem", color: "var(--danger)" }}
+      >
+        {label}: incompatible
+      </div>
+    );
+  };
+
+  const renderModelCheckMessage = (check: ModelCheckState) => {
+    if (!check.message) return null;
+    const color =
+      check.compatible === null
+        ? "var(--muted)"
+        : check.compatible
+          ? "var(--success)"
+          : "var(--danger)";
+    return (
+      <p
+        className="mono"
+        style={{ margin: "0.25rem 0 0", color, fontSize: "0.78rem", maxWidth: "100%" }}
+      >
+        {check.message}
+      </p>
+    );
+  };
 
   const jumpToStep = (step: WorkspaceStep) => {
     setActiveStep(step);
@@ -280,15 +591,44 @@ export function ProjectWorkspace() {
   }, [projectId]);
 
   useEffect(() => {
+    if (!isBackendConnected) return;
+    void restoreRunningJob();
+  }, [isBackendConnected, projectId]);
+
+  useEffect(() => {
+    if (!isBackendConnected) return;
+    const handle = window.setTimeout(() => {
+      void checkBaseModelCompatibility(trainCfg.base_model);
+    }, 450);
+    return () => clearTimeout(handle);
+  }, [trainCfg.base_model, isBackendConnected]);
+
+  useEffect(() => {
+    if (!isBackendConnected) return;
+    const handle = window.setTimeout(() => {
+      void checkNerModelCompatibility(nerModel);
+    }, 450);
+    return () => clearTimeout(handle);
+  }, [nerModel, isBackendConnected]);
+
+  useEffect(() => {
     if (!jobId) return;
     const t = setInterval(() => {
-      api.jobStatus(jobId).then((j) => {
-        setJobPoll(j);
-        if (j.state === "completed" || j.state === "failed") {
+      api
+        .jobStatus(jobId)
+        .then((j) => {
+          setJobPoll(j);
+          if (j.state === "completed" || j.state === "failed") {
+            clearInterval(t);
+            refreshModels();
+            rememberRunningJob(null);
+          }
+        })
+        .catch(() => {
           clearInterval(t);
-          refreshModels();
-        }
-      });
+          rememberRunningJob(null);
+          setJobPoll(null);
+        });
     }, 1500);
     return () => clearInterval(t);
   }, [jobId]);
@@ -326,13 +666,36 @@ export function ProjectWorkspace() {
 
   const isJobRunning = Boolean(
     jobId &&
-      (jobState === "running" ||
-        jobState === "queued" ||
-        jobState === "in_progress" ||
-        jobState === "starting" ||
-        jobState === "started" ||
-        jobState === "pending")
+      isJobStateRunning(jobState) &&
+      (typeof jobPoll === "object" && jobPoll !== null)
   );
+
+  const jobRemainingSeconds = (() => {
+    if (!isJobRunning || jobProgressPercent === null) return null;
+    if (jobProgressPercent <= 0.1) return null;
+    const createdAt = (() => {
+      if (typeof jobPoll !== "object" || jobPoll === null) return null;
+      if (!("created_at" in jobPoll)) return null;
+      return toEpochMsOrNull((jobPoll as { created_at?: unknown }).created_at);
+    })();
+    if (createdAt === null) return null;
+    const elapsedSec = Math.max(0, (Date.now() - createdAt) / 1000);
+    if (elapsedSec <= 0) return null;
+    const progressRatio = jobProgressPercent / 100;
+    if (!progressRatio || !Number.isFinite(progressRatio)) return null;
+    const estimatedTotalSec = elapsedSec / progressRatio;
+    return Math.max(0, Math.round(estimatedTotalSec - elapsedSec));
+  })();
+
+  const jobRemainingText =
+    jobRemainingSeconds === null ? null : formatSecondsAsHuman(jobRemainingSeconds);
+
+  const jobMessage = (() => {
+    if (typeof jobPoll !== "object" || jobPoll === null) return "";
+    if (!("message" in jobPoll)) return "";
+    const message = (jobPoll as { message?: unknown }).message;
+    return typeof message === "string" ? message : "";
+  })();
 
   const globalLoadingMessage = (() => {
     if (backendStatus === "checking") return "Checking backend...";
@@ -341,7 +704,9 @@ export function ProjectWorkspace() {
     if (pubmedBusy) return "Fetching PubMed data...";
     if (compareBusy) return "Running LitSuggest comparison...";
     if (busy && busyMessage) return busyMessage;
-    if (isJobRunning) return `Training job ${jobId}: ${jobState || "running"}`;
+    if (isJobRunning) {
+      return `Training job ${jobId}: ${jobStateText(jobState)}`;
+    }
     if (busy) return "Working...";
     return null;
   })();
@@ -351,15 +716,20 @@ export function ProjectWorkspace() {
   const train = async (kfold: boolean) => {
     setErr(null);
     setBusy(true);
-    setBusyMessage(kfold ? "Submitting k-fold training job..." : "Submitting training job...");
+    setBusyMessage("Validating base model...");
     try {
+      if (!(await validateBaseModelBeforeTrain())) {
+        return;
+      }
+      setBusyMessage(kfold ? "Submitting k-fold training job..." : "Submitting training job...");
       const articles = parseArticles();
       const cfg = { ...trainCfg, n_splits: kfoldSplits };
       const res = kfold
         ? await api.trainKfold(projectId, articles, cfg)
         : await api.trainRelevance(projectId, articles, trainCfg, valSplit);
-      setJobId(res.job_id);
-      setJobPoll(null);
+      const status = await api.jobStatus(res.job_id);
+      setJobPoll(status);
+      rememberRunningJob(res.job_id);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -374,6 +744,13 @@ export function ProjectWorkspace() {
     setBusyMessage("Running pipeline jobs...");
     setPipeResult(null);
     try {
+      if (mode === "ner" || mode === "full") {
+        setBusyMessage("Validating NER model...");
+        if (!(await validateNerModelForPipeline())) {
+          return;
+        }
+      }
+      setBusyMessage("Running pipeline jobs...");
       const articles = JSON.parse(pipeJson) as Article[];
       const payload: Parameters<typeof api.runPipeline>[0] = {
         project_id: projectId,
@@ -602,6 +979,8 @@ export function ProjectWorkspace() {
       setErr(null);
       void refreshBaseModels();
       void refreshModels();
+      void refreshLastRun();
+      void restoreRunningJob();
     } catch (err) {
       setBackendStatus("failed");
       setBackendStatusText((err as Error).message || "Unable to connect");
@@ -768,7 +1147,10 @@ export function ProjectWorkspace() {
             <span className="loading-spinner" aria-hidden="true" />
             <span className="mono">
               {globalLoadingMessage}
-              {globalLoadingPercent !== null ? ` · ${Math.round(globalLoadingPercent)}%` : ""}
+              {isJobRunning && globalLoadingPercent !== null
+                ? ` · ${Math.round(globalLoadingPercent)}%`
+                : ""}
+              {isJobRunning && jobRemainingText ? ` · ETA ${jobRemainingText}` : ""}
             </span>
           </div>
           <div className="loading-track">
@@ -874,9 +1256,11 @@ export function ProjectWorkspace() {
             <div className="toolbar" style={{ marginTop: "0.15rem" }}>
               <select
                 value={trainCfg.base_model}
-                onChange={(e) =>
-                  setTrainCfg({ ...trainCfg, base_model: e.target.value })
-                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTrainCfg({ ...trainCfg, base_model: value });
+                  void checkBaseModelCompatibility(value, true);
+                }}
               >
                 {availableBaseModels.map((m) => (
                   <option key={m} value={m}>
@@ -896,6 +1280,8 @@ export function ProjectWorkspace() {
                 Refresh
               </button>
             </div>
+            <div>{renderModelCheckTag("Base model", baseModelCheck)}</div>
+            {renderModelCheckMessage(baseModelCheck)}
             <div className="toolbar" style={{ marginTop: "0.6rem" }}>
               <input
                 value={baseModelToDownload}
@@ -1072,6 +1458,41 @@ export function ProjectWorkspace() {
         {jobId && (
           <div style={{ marginTop: "1rem" }}>
             <span className="tag">job {jobId}</span>
+            {jobMessage && <div className="tag" style={{ marginLeft: "0.5rem" }}>{jobMessage}</div>}
+            <div
+              style={{
+                marginTop: "0.5rem",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.4rem",
+                alignItems: "center",
+              }}
+            >
+              <span className="tag">
+                state: {jobState || "unknown"} · {isJobRunning ? "running" : "not running"}
+              </span>
+              <span className="tag">
+                progress:{" "}
+                {jobProgressPercent === null ? "estimating" : `${Math.round(jobProgressPercent)}%`}
+              </span>
+              <span className="tag">
+                eta: {jobRemainingText || "estimating"}
+              </span>
+            </div>
+            <div className="loading-track" style={{ marginTop: "0.65rem" }}>
+              <div
+                className={`loading-fill ${
+                  jobProgressPercent !== null
+                    ? "loading-fill-determinate"
+                    : "loading-fill-indeterminate"
+                }`}
+                style={
+                  jobProgressPercent !== null
+                    ? { width: `${Math.max(4, jobProgressPercent)}%` }
+                    : undefined
+                }
+              />
+            </div>
             <pre
               className="mono"
               style={{
@@ -1410,8 +1831,14 @@ export function ProjectWorkspace() {
             <label>NER model (Hugging Face id)</label>
             <input
               value={nerModel}
-              onChange={(e) => setNerModel(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setNerModel(value);
+                void checkNerModelCompatibility(value, true);
+              }}
             />
+            <div>{renderModelCheckTag("NER model", nerModelCheck)}</div>
+            {renderModelCheckMessage(nerModelCheck)}
           </div>
           <div>
             <label>Batch size</label>

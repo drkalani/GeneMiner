@@ -31,6 +31,7 @@ pip install -e ".[api]"
 
 ```bash
 cd backend
+export HF_TOKEN=your_hf_token_here  # Optional: improves HF download speed and rate limits
 export PYTHONPATH=.
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
@@ -38,6 +39,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 Or from the repo root:
 
 ```bash
+export HF_TOKEN=your_hf_token_here  # Optional
 chmod +x scripts/run_backend.sh
 ./scripts/run_backend.sh
 ```
@@ -140,6 +142,12 @@ print(fetch.json() if fetch.headers.get("content-type","").startswith("applicati
 ```
 
 ### Docker deployment (recommended)
+
+Set token before compose (optional, but recommended):
+
+```bash
+export HF_TOKEN=your_hf_token_here
+```
 
 Build and run both backend and frontend in containers:
 

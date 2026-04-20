@@ -15,6 +15,15 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _coerce_progress(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def new_job_id() -> str:
     return str(uuid.uuid4())
 
@@ -25,9 +34,13 @@ def set_job(
     message: str = "",
     result: Optional[Dict] = None,
     project_id: Optional[str] = None,
+    progress: Optional[float] = None,
 ) -> None:
     with _lock:
         current = _jobs.get(job_id, {})
+        next_progress = _coerce_progress(progress)
+        if next_progress is None:
+            next_progress = current.get("progress")
         _jobs[job_id] = {
             "job_id": job_id,
             "project_id": project_id if project_id is not None else current.get("project_id"),
@@ -35,6 +48,8 @@ def set_job(
             "message": message,
             "result": result,
             "created_at": current.get("created_at") or _timestamp(),
+            "updated_at": _timestamp(),
+            "progress": next_progress,
         }
 
 
@@ -57,4 +72,9 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 def update_job(job_id: str, **kwargs: Any) -> None:
     with _lock:
         if job_id in _jobs:
+            if "progress" in kwargs:
+                kwargs["progress"] = _coerce_progress(
+                    kwargs["progress"] if kwargs["progress"] is not None else None
+                )
+            kwargs.setdefault("updated_at", _timestamp())
             _jobs[job_id].update(kwargs)

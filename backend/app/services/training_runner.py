@@ -76,10 +76,11 @@ def run_single_train_job(
 ) -> None:
     def _run() -> None:
         try:
-            job_store.set_job(job_id, "running", "Preparing data…")
+            job_store.set_job(job_id, "running", "Preparing data…", progress=0.05)
             arts = _dedupe_articles(body.articles) if body.dedupe_by_pmid else list(body.articles)
             texts, labels, _pmids, titles_b = _articles_to_training(arts)
             cfg: TrainingConfig = body.config
+            job_store.set_job(job_id, "running", "Splitting train/validation data…", progress=0.2)
 
             if len(set(labels)) < 2:
                 raise ValueError("Need at least one sample per class (0 and 1) to train")
@@ -102,6 +103,7 @@ def run_single_train_job(
                     stratify=labels,
                 )
                 train_tb = val_tb = None
+            job_store.set_job(job_id, "running", "Fine-tuning BioBERT…", progress=0.3)
 
             out_name = f"relevance_{job_id[:8]}"
             out_dir = project_dir(project_id) / "models" / out_name
@@ -109,7 +111,7 @@ def run_single_train_job(
                 shutil.rmtree(out_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            job_store.set_job(job_id, "running", "Fine-tuning BioBERT…")
+            job_store.set_job(job_id, "running", "Fine-tuning BioBERT…", progress=0.35)
             kw_train: Dict[str, Any] = dict(
                 train_texts=train_t,
                 train_labels=train_y,
@@ -131,6 +133,7 @@ def run_single_train_job(
                 kw_train["train_texts_b"] = train_tb
                 kw_train["val_texts_b"] = val_tb
             _, _, eval_metrics = train_relevance_classifier(**kw_train)
+            job_store.set_job(job_id, "running", "Evaluating validation set…", progress=0.95)
 
             preds, probs = predict_relevance(
                 val_t,
@@ -167,7 +170,7 @@ def run_single_train_job(
             (out_dir / "validation_report.json").write_text(
                 json.dumps(result, indent=2), encoding="utf-8"
             )
-            job_store.set_job(job_id, "completed", "Done", result=result)
+            job_store.set_job(job_id, "completed", "Done", result=result, progress=1.0)
         except Exception as exc:  # noqa: BLE001
             job_store.set_job(job_id, "failed", message=str(exc), result=None)
 
@@ -181,7 +184,7 @@ def run_kfold_train_job(
 ) -> None:
     def _run() -> None:
         try:
-            job_store.set_job(job_id, "running", "K-fold cross-validation…")
+            job_store.set_job(job_id, "running", "K-fold cross-validation…", progress=0.05)
             arts = _dedupe_articles(body.articles) if body.dedupe_by_pmid else list(body.articles)
             texts, labels, _, titles_b = _articles_to_training(arts)
             cfg = body.config
@@ -195,6 +198,12 @@ def run_kfold_train_job(
             fold_metrics: List[Dict[str, Any]] = []
             out_root = project_dir(project_id) / "models" / f"kfold_{job_id[:8]}"
             out_root.mkdir(parents=True, exist_ok=True)
+            job_store.set_job(
+                job_id,
+                "running",
+                f"Running {cfg.n_splits}-fold cross-validation…",
+                progress=0.1,
+            )
 
             for fold_idx, (train_idx, val_idx) in enumerate(
                 skf.split(texts, labels)
@@ -202,6 +211,10 @@ def run_kfold_train_job(
                 job_store.update_job(
                     job_id,
                     message=f"Training fold {fold_idx + 1}/{cfg.n_splits}…",
+                    progress=min(
+                        0.95,
+                        0.1 + 0.85 * ((fold_idx + 1) / max(1, cfg.n_splits)),
+                    ),
                 )
                 train_t = [texts[i] for i in train_idx]
                 train_y = [labels[i] for i in train_idx]
@@ -299,7 +312,13 @@ def run_kfold_train_job(
             (out_root / "kfold_summary.json").write_text(
                 json.dumps(summary, indent=2), encoding="utf-8"
             )
-            job_store.set_job(job_id, "completed", "K-fold complete", result=summary)
+            job_store.set_job(
+                job_id,
+                "completed",
+                "K-fold complete",
+                result=summary,
+                progress=1.0,
+            )
         except Exception as exc:  # noqa: BLE001
             job_store.set_job(job_id, "failed", message=str(exc), result=None)
 
