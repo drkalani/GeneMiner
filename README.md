@@ -81,6 +81,64 @@ Run this notebook on Google Colab to expose the backend using a free GPU:
 - It installs backend dependencies, starts FastAPI in background, and opens an ngrok tunnel.
 - Replace `REPO_URL` in the notebook with your own repository URL.
 
+You can also run a one-command smoke check (works both local and Colab) after backend is up:
+
+```bash
+python scripts/colab_smoke_check.py --base-url "https://<your-ngrok-domain>"
+```
+
+For PubMed fetch check include email (recommended) and keep `max_results` small:
+
+```bash
+python scripts/colab_smoke_check.py \
+  --base-url "https://<your-ngrok-domain>" \
+  --email your_email@example.edu
+```
+
+If your Colab runtime blocks external NCBI requests, skip this step:
+
+```bash
+python scripts/colab_smoke_check.py \
+  --base-url "https://<your-ngrok-domain>" \
+  --skip-pubmed
+```
+
+### Colab notebook smoke snippet
+
+You can paste this directly in Colab as a cell (after `BASE_URL` is set):
+
+```python
+import os
+import requests
+
+base = BASE_URL.rstrip("/")
+probe_email = "you@example.edu"  # optional when skipping pubmed
+
+print("health", requests.get(f"{base}/health", timeout=20).status_code)
+pr = requests.post(f"{base}/projects", json={"name":"Colab smoke","disease_key":"colab","description":"smoke"}, timeout=20)
+print("create project", pr.status_code, pr.text[:200])
+pid = pr.json()["id"]
+
+cmp = requests.post(
+    f"{base}/projects/{pid}/data/compare/litsuggest",
+    json={
+        "primary":[{"pmid":"10","label":1},{"pmid":"11","label":0}],
+        "litsuggest":[{"pmid":"10","score":0.87},{"pmid":"11","score":0.15}],
+        "score_threshold":0.5,
+    },
+    timeout=20,
+)
+print("compare", cmp.status_code, cmp.json())
+
+fetch = requests.post(
+    f"{base}/projects/{pid}/data/pubmed/fetch",
+    json={"email":probe_email, "query": '\"diabetic kidney disease\"[Title/Abstract]', "max_results":5},
+    timeout=60,
+)
+print("pubmed fetch", fetch.status_code)
+print(fetch.json() if fetch.headers.get("content-type","").startswith("application/json") else fetch.text[:200])
+```
+
 ### Docker deployment (recommended)
 
 Build and run both backend and frontend in containers:
@@ -149,6 +207,9 @@ Importable Python package `geneminer_core` (installed with `pip install -e .`):
 | GET | `/projects/{id}/data/export/bundle?format=` | `pkl` or `xlsx` (all tables present on disk) |
 | GET | `/projects/{id}/data/templates/articles` | Download CSV column template |
 | GET | `/projects/{id}/data/templates/mentions` | Mentions CSV template |
+| POST | `/projects/{id}/data/pubmed/fetch` | Fetch abstracts from PubMed via Entrez |
+| POST | `/projects/{id}/data/import/litsuggest-scores` | Upload LitSuggest score rows (`pmid`,`score`) |
+| POST | `/projects/{id}/data/compare/litsuggest` | Compare model labels against LitSuggest scores |
 
 ## Notes
 
