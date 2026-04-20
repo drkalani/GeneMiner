@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import data, pipeline, projects, system, training
+from app.routers import data, external_data, pipeline, projects, system, training
 
 settings = get_settings()
 
@@ -27,6 +27,7 @@ app.add_middleware(
 app.include_router(system.router)
 app.include_router(projects.router)
 app.include_router(data.router)
+app.include_router(external_data.router)
 app.include_router(training.router)
 app.include_router(pipeline.router)
 

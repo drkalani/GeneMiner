@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import shutil
 import threading
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, classification_report, f1_score, precision_score, recall_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 from app.config import get_settings
@@ -20,17 +20,53 @@ from geneminer_core.metrics import binary_classification_metrics, confusion_bina
 from geneminer_core.relevance import predict_relevance, train_relevance_classifier
 
 
-def _fix_articles_to_xy(articles: List[ArticleInput]) -> Tuple[List[str], List[int], List[str]]:
+def _json_safe(obj: Any) -> Any:
+    """Convert numpy / sklearn outputs for JSON job results."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, (float, int, str, bool)) or obj is None:
+        return obj
+    if hasattr(obj, "item") and callable(getattr(obj, "item")):
+        try:
+            return obj.item()
+        except Exception:
+            return str(obj)
+    return obj
+
+
+def _dedupe_articles(articles: List[ArticleInput]) -> List[ArticleInput]:
+    seen: set[str] = set()
+    out: List[ArticleInput] = []
+    for a in articles:
+        k = str(a.pmid).strip()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(a)
+    return out
+
+
+def _articles_to_training(
+    articles: List[ArticleInput],
+) -> Tuple[List[str], List[int], List[str], Optional[List[str]]]:
     texts: List[str] = []
     labels: List[int] = []
     pmids: List[str] = []
+    raw_titles: List[str] = []
     for a in articles:
         if a.label is None:
             raise ValueError("Each article must have label (0 or 1) for training")
         texts.append(a.text)
         labels.append(int(a.label))
         pmids.append(str(a.pmid))
-    return texts, labels, pmids
+        raw_titles.append((a.title or "").strip())
+    pair = any(raw_titles)
+    titles_b: Optional[List[str]] = raw_titles if pair else None
+    return texts, labels, pmids, titles_b
 
 
 def run_single_train_job(
@@ -41,20 +77,31 @@ def run_single_train_job(
     def _run() -> None:
         try:
             job_store.set_job(job_id, "running", "Preparing data…")
-            texts, labels, _pmids = _fix_articles_to_xy(body.articles)
+            arts = _dedupe_articles(body.articles) if body.dedupe_by_pmid else list(body.articles)
+            texts, labels, _pmids, titles_b = _articles_to_training(arts)
             cfg: TrainingConfig = body.config
 
             if len(set(labels)) < 2:
                 raise ValueError("Need at least one sample per class (0 and 1) to train")
 
-            strat = labels
-            train_t, val_t, train_y, val_y = train_test_split(
-                texts,
-                labels,
-                test_size=body.validation_split,
-                random_state=cfg.seed,
-                stratify=strat,
-            )
+            if titles_b is not None:
+                train_t, val_t, train_y, val_y, train_tb, val_tb = train_test_split(
+                    texts,
+                    labels,
+                    titles_b,
+                    test_size=body.validation_split,
+                    random_state=cfg.seed,
+                    stratify=labels,
+                )
+            else:
+                train_t, val_t, train_y, val_y = train_test_split(
+                    texts,
+                    labels,
+                    test_size=body.validation_split,
+                    random_state=cfg.seed,
+                    stratify=labels,
+                )
+                train_tb = val_tb = None
 
             out_name = f"relevance_{job_id[:8]}"
             out_dir = project_dir(project_id) / "models" / out_name
@@ -63,11 +110,11 @@ def run_single_train_job(
             out_dir.mkdir(parents=True, exist_ok=True)
 
             job_store.set_job(job_id, "running", "Fine-tuning BioBERT…")
-            _, _tok, eval_metrics = train_relevance_classifier(
-                train_t,
-                train_y,
-                val_t,
-                val_y,
+            kw_train: Dict[str, Any] = dict(
+                train_texts=train_t,
+                train_labels=train_y,
+                val_texts=val_t,
+                val_labels=val_y,
                 output_dir=out_dir,
                 device_kind=cfg.processor,
                 base_model=cfg.base_model,
@@ -80,6 +127,10 @@ def run_single_train_job(
                 max_length=cfg.max_length,
                 fp16=cfg.fp16,
             )
+            if train_tb is not None and val_tb is not None:
+                kw_train["train_texts_b"] = train_tb
+                kw_train["val_texts_b"] = val_tb
+            _, _, eval_metrics = train_relevance_classifier(**kw_train)
 
             preds, probs = predict_relevance(
                 val_t,
@@ -87,6 +138,7 @@ def run_single_train_job(
                 device_kind=cfg.processor,
                 batch_size=cfg.per_device_eval_batch_size,
                 max_length=cfg.max_length,
+                texts_b=val_tb,
             )
             pr = (
                 np.stack([1 - probs, probs], axis=1)
@@ -96,6 +148,7 @@ def run_single_train_job(
             metrics = binary_classification_metrics(val_y, preds.tolist(), pr)
 
             cm = confusion_binary(val_y, preds.tolist())
+            report_dict = classification_report(val_y, preds.tolist(), output_dict=True, zero_division=0)
 
             result = {
                 "model_id": out_name,
@@ -103,6 +156,7 @@ def run_single_train_job(
                 "eval_loss": float(eval_metrics.get("eval_loss", 0.0)),
                 "metrics": metrics,
                 "confusion": cm,
+                "classification_report": _json_safe(report_dict),
                 "eval_sklearn": {
                     "accuracy": float(accuracy_score(val_y, preds)),
                     "precision": float(precision_score(val_y, preds, zero_division=0)),
@@ -128,7 +182,8 @@ def run_kfold_train_job(
     def _run() -> None:
         try:
             job_store.set_job(job_id, "running", "K-fold cross-validation…")
-            texts, labels, _ = _fix_articles_to_xy(body.articles)
+            arts = _dedupe_articles(body.articles) if body.dedupe_by_pmid else list(body.articles)
+            texts, labels, _, titles_b = _articles_to_training(arts)
             cfg = body.config
 
             if len(set(labels)) < 2:
@@ -152,17 +207,23 @@ def run_kfold_train_job(
                 train_y = [labels[i] for i in train_idx]
                 val_t = [texts[i] for i in val_idx]
                 val_y = [labels[i] for i in val_idx]
+                train_tb: Optional[List[str]] = (
+                    [titles_b[i] for i in train_idx] if titles_b is not None else None
+                )
+                val_tb: Optional[List[str]] = (
+                    [titles_b[i] for i in val_idx] if titles_b is not None else None
+                )
 
                 fold_dir = out_root / f"fold_{fold_idx}"
                 if fold_dir.exists():
                     shutil.rmtree(fold_dir)
                 fold_dir.mkdir(parents=True)
 
-                _, _, eval_metrics = train_relevance_classifier(
-                    train_t,
-                    train_y,
-                    val_t,
-                    val_y,
+                kw_fold: Dict[str, Any] = dict(
+                    train_texts=train_t,
+                    train_labels=train_y,
+                    val_texts=val_t,
+                    val_labels=val_y,
                     output_dir=fold_dir,
                     device_kind=cfg.processor,
                     base_model=cfg.base_model,
@@ -175,26 +236,53 @@ def run_kfold_train_job(
                     max_length=cfg.max_length,
                     fp16=cfg.fp16,
                 )
+                if train_tb is not None and val_tb is not None:
+                    kw_fold["train_texts_b"] = train_tb
+                    kw_fold["val_texts_b"] = val_tb
+                _, _, eval_metrics = train_relevance_classifier(**kw_fold)
                 preds, probs = predict_relevance(
                     val_t,
                     fold_dir,
                     device_kind=cfg.processor,
                     batch_size=cfg.per_device_eval_batch_size,
                     max_length=cfg.max_length,
+                    texts_b=val_tb,
                 )
-                m = binary_classification_metrics(val_y, preds.tolist(), None)
-                fold_metrics.append(
-                    {
-                        "fold": fold_idx,
-                        "eval_loss": float(eval_metrics.get("eval_loss", 0.0)),
-                        "metrics": m,
-                        "confusion": confusion_binary(val_y, preds.tolist()),
-                    }
+                pr = (
+                    np.stack([1 - probs, probs], axis=1)
+                    if probs is not None and len(probs) == len(val_y)
+                    else None
+                )
+                m = binary_classification_metrics(val_y, preds.tolist(), pr)
+                report_dict = classification_report(
+                    val_y, preds.tolist(), output_dict=True, zero_division=0
+                )
+                fold_block = {
+                    "fold": fold_idx,
+                    "eval_loss": float(eval_metrics.get("eval_loss", 0.0)),
+                    "metrics": m,
+                    "confusion": confusion_binary(val_y, preds.tolist()),
+                    "classification_report": _json_safe(report_dict),
+                    "eval_sklearn": {
+                        "accuracy": float(accuracy_score(val_y, preds)),
+                        "precision": float(precision_score(val_y, preds, zero_division=0)),
+                        "recall": float(recall_score(val_y, preds, zero_division=0)),
+                        "f1": float(f1_score(val_y, preds, zero_division=0)),
+                    },
+                }
+                fold_metrics.append(fold_block)
+                (fold_dir / "fold_report.json").write_text(
+                    json.dumps(fold_block, indent=2), encoding="utf-8"
                 )
 
             # aggregate
-            f1s = [f["metrics"].get("f1", 0.0) for f in fold_metrics]
-            accs = [f["metrics"].get("accuracy", 0.0) for f in fold_metrics]
+            f1s = [float(f["metrics"].get("f1", 0.0)) for f in fold_metrics]
+            accs = [float(f["metrics"].get("accuracy", 0.0)) for f in fold_metrics]
+            rocs = [
+                float(f["metrics"].get("roc_auc", 0.0))
+                for f in fold_metrics
+                if "roc_auc" in f.get("metrics", {})
+            ]
             summary = {
                 "model_bundle": out_root.name,
                 "path": str(out_root.relative_to(get_settings().data_dir)),
@@ -205,6 +293,9 @@ def run_kfold_train_job(
                 "mean_accuracy": float(np.mean(accs)),
                 "std_accuracy": float(np.std(accs)),
             }
+            if rocs:
+                summary["mean_roc_auc"] = float(np.mean(rocs))
+                summary["std_roc_auc"] = float(np.std(rocs))
             (out_root / "kfold_summary.json").write_text(
                 json.dumps(summary, indent=2), encoding="utf-8"
             )

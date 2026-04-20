@@ -20,7 +20,15 @@ from geneminer_core.schemas import ArticleRow
 
 
 def articles_to_rows(articles: List[ArticleInput]) -> List[ArticleRow]:
-    return [ArticleRow(pmid=str(a.pmid), text=str(a.text), label=a.label) for a in articles]
+    return [
+        ArticleRow(
+            pmid=str(a.pmid),
+            text=str(a.text),
+            label=a.label,
+            title=(a.title.strip() if a.title and a.title.strip() else None),
+        )
+        for a in articles
+    ]
 
 
 def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:

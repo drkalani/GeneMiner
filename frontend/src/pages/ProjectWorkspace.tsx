@@ -41,12 +41,21 @@ const mpsTrainPreset = (): TrainingConfig => ({
 });
 
 const exampleArticlesJson = `[
-  {"pmid":"10000001","text":"TGF-beta signaling in diabetic nephropathy and kidney fibrosis.","label":1},
+  {"pmid":"10000001","title":"Gene regulation in DKD","text":"TGF-beta signaling in diabetic nephropathy and kidney fibrosis.","label":1},
   {"pmid":"10000002","text":"Weather patterns in coastal regions unrelated to nephrology.","label":0}
 ]`;
 const examplePipelineArticlesJson = `[
-  {"pmid":"10000001","text":"TGF-beta signaling in diabetic nephropathy and kidney fibrosis."},
+  {"pmid":"10000001","title":"Gene regulation in DKD","text":"TGF-beta signaling in diabetic nephropathy and kidney fibrosis."},
   {"pmid":"10000002","text":"Weather patterns in coastal regions unrelated to nephrology."}
+]`;
+
+const exampleComparePrimary = `[
+  {"pmid":"10000001","label":1},
+  {"pmid":"10000002","label":0}
+]`;
+const exampleCompareLitSuggest = `[
+  {"pmid":"10000001","score":0.82},
+  {"pmid":"10000002","score":0.31}
 ]`;
 
 type ClassificationRow = {
@@ -56,7 +65,7 @@ type ClassificationRow = {
   relevance_prob?: number;
 };
 
-type WorkspaceStep = "backend" | "train" | "pipeline";
+type WorkspaceStep = "backend" | "train" | "integrations" | "pipeline";
 
 const toNumberOrNull = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -132,6 +141,27 @@ export function ProjectWorkspace() {
   const trainFileRef = useRef<HTMLInputElement>(null);
   const pipeFileRef = useRef<HTMLInputElement>(null);
   const mentionFileRef = useRef<HTMLInputElement>(null);
+  const litsuggestFileRef = useRef<HTMLInputElement>(null);
+
+  const [pubmedEmail, setPubmedEmail] = useState("");
+  const [pubmedQuery, setPubmedQuery] = useState(
+    '("diabetic kidney disease"[Title/Abstract]) AND 2020:2024[dp]'
+  );
+  const [pubmedMax, setPubmedMax] = useState(50);
+  const [pubmedMinAbstract, setPubmedMinAbstract] = useState(0);
+  const [pubmedResult, setPubmedResult] = useState<{
+    articles: { pmid: string; title: string; text: string }[];
+    row_count: number;
+    queried_id_count: number;
+    search_total_estimate: number | null;
+  } | null>(null);
+  const [pubmedBusy, setPubmedBusy] = useState(false);
+
+  const [comparePrimaryJson, setComparePrimaryJson] = useState(exampleComparePrimary);
+  const [compareLitJson, setCompareLitJson] = useState(exampleCompareLitSuggest);
+  const [compareThreshold, setCompareThreshold] = useState(0.5);
+  const [compareResult, setCompareResult] = useState<Record<string, unknown> | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
 
   const isBackendConnected = backendStatus === "connected";
 
@@ -193,12 +223,19 @@ export function ProjectWorkspace() {
   const parseArticles = (): Article[] => {
     const raw = JSON.parse(articlesJson) as Article[];
     if (!Array.isArray(raw)) throw new Error("Expected JSON array");
-    return raw.map((a) => ({
-      pmid: String(a.pmid),
-      text: String(a.text),
-      label:
-        a.label === undefined || a.label === null ? undefined : Number(a.label),
-    }));
+    return raw.map((a) => {
+      const titleStr =
+        a.title !== undefined && a.title !== null && String(a.title).trim() !== ""
+          ? String(a.title).trim()
+          : undefined;
+      return {
+        pmid: String(a.pmid),
+        text: String(a.text),
+        ...(titleStr !== undefined ? { title: titleStr } : {}),
+        label:
+          a.label === undefined || a.label === null ? undefined : Number(a.label),
+      };
+    });
   };
 
   const train = async (kfold: boolean) => {
@@ -228,14 +265,23 @@ export function ProjectWorkspace() {
       const payload: Parameters<typeof api.runPipeline>[0] = {
         project_id: projectId,
         model_id: modelId,
-        articles: articles.map((a) => ({
-          pmid: String(a.pmid),
-          text: String(a.text),
-          label:
-            a.label === undefined || a.label === null
-              ? undefined
-              : Number(a.label),
-        })),
+        articles: articles.map((a) => {
+          const base = {
+            pmid: String(a.pmid),
+            text: String(a.text),
+            label:
+              a.label === undefined || a.label === null
+                ? undefined
+                : Number(a.label),
+          };
+          const titleStr =
+            a.title !== undefined &&
+            a.title !== null &&
+            String(a.title).trim() !== ""
+              ? String(a.title).trim()
+              : undefined;
+          return titleStr !== undefined ? { ...base, title: titleStr } : base;
+        }),
         mode,
         processor,
         ner_model: nerModel,
@@ -255,6 +301,83 @@ export function ProjectWorkspace() {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const runPubmedFetch = async () => {
+    if (!projectId) return;
+    if (!pubmedEmail.trim() || !pubmedEmail.includes("@")) {
+      setErr("Enter a valid email (required by NCBI Entrez).");
+      return;
+    }
+    setErr(null);
+    setPubmedBusy(true);
+    setPubmedResult(null);
+    try {
+      const r = await api.pubmedFetch(projectId, {
+        email: pubmedEmail.trim(),
+        query: pubmedQuery.trim() || undefined,
+        max_results: pubmedMax,
+        min_abstract_chars: pubmedMinAbstract,
+      });
+      setPubmedResult(r);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPubmedBusy(false);
+    }
+  };
+
+  const copyPubmedToPipelineJson = () => {
+    if (!pubmedResult?.articles?.length) return;
+    const lines = pubmedResult.articles.map((a) => {
+      const row: Record<string, string> = {
+        pmid: a.pmid,
+        text: a.text || "",
+      };
+      if (a.title?.trim()) row.title = a.title.trim();
+      return row;
+    });
+    setPipeJson(JSON.stringify(lines, null, 2));
+    jumpToStep("pipeline");
+  };
+
+  const runLitCompare = async () => {
+    setErr(null);
+    setCompareBusy(true);
+    setCompareResult(null);
+    try {
+      const primary = JSON.parse(comparePrimaryJson) as Record<string, unknown>[];
+      const litsuggest = JSON.parse(compareLitJson) as Record<string, unknown>[];
+      if (!Array.isArray(primary) || !Array.isArray(litsuggest)) {
+        throw new Error("Expected two JSON arrays");
+      }
+      const r = await api.compareLitSuggest(projectId, {
+        primary,
+        litsuggest,
+        score_threshold: compareThreshold,
+      });
+      setCompareResult(r);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setCompareBusy(false);
+    }
+  };
+
+  const onLitSuggestFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f || !projectId) return;
+    setErr(null);
+    setCompareBusy(true);
+    try {
+      const r = await api.importLitSuggestScores(projectId, f);
+      setCompareLitJson(JSON.stringify(r.litsuggest, null, 2));
+    } catch (err) {
+      setErr((err as Error).message);
+    } finally {
+      setCompareBusy(false);
     }
   };
 
@@ -405,6 +528,16 @@ export function ProjectWorkspace() {
           2 · Train
         </a>
         <a
+          href="#workspace-integrations"
+          onClick={(e) => {
+            e.preventDefault();
+            jumpToStep("integrations");
+          }}
+          className={activeStep === "integrations" ? "step-pill active" : "step-pill"}
+        >
+          3 · PubMed & LitSuggest
+        </a>
+        <a
           href="#workspace-pipeline"
           onClick={(e) => {
             e.preventDefault();
@@ -412,7 +545,7 @@ export function ProjectWorkspace() {
           }}
           className={activeStep === "pipeline" ? "step-pill active" : "step-pill"}
         >
-          3 · Pipeline
+          4 · Pipeline
         </a>
       </div>
       <div className="toolbar" style={{ marginBottom: "1rem" }}>
@@ -484,12 +617,13 @@ export function ProjectWorkspace() {
       )}
 
       <div id="workspace-train" className="card">
-        <h3 style={{ marginTop: 0 }}>1 · Train relevance (BioBERT)</h3>
+        <h3 style={{ marginTop: 0 }}>2 · Train relevance (BioBERT)</h3>
         <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
-          Paste JSON array of objects:{" "}
-          <code className="mono">pmid</code>, <code className="mono">text</code>
-          , <code className="mono">label</code> (0 or 1). Use enough examples per
-          class.
+          Paste JSON array: <code className="mono">pmid</code>,{" "}
+          <code className="mono">text</code> (abstract or body),{" "}
+          <code className="mono">label</code> (0 or 1). Optional{" "}
+          <code className="mono">title</code> enables title+abstract pair encoding (DKDM-style).
+          Imports deduplicate by PMID (first row kept).
         </p>
         <textarea
           value={articlesJson}
@@ -704,9 +838,9 @@ export function ProjectWorkspace() {
             type="button"
             className="btn"
             disabled={busy}
-            onClick={() => jumpToStep("pipeline")}
+            onClick={() => jumpToStep("integrations")}
           >
-            Next: pipeline
+            Next: PubMed & LitSuggest
           </button>
         </div>
 
@@ -730,8 +864,185 @@ export function ProjectWorkspace() {
         )}
       </div>
 
+      <div id="workspace-integrations" className="card">
+        <h3 style={{ marginTop: 0 }}>3 · PubMed (Entrez) fetch & LitSuggest comparison</h3>
+        <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
+          Fetch citations from NCBI (email required), then optionally compare your binary labels to LitSuggest
+          scores (DKDM-style threshold on scores).
+        </p>
+
+        <h4 style={{ marginBottom: "0.5rem" }}>PubMed fetch</h4>
+        <div className="grid2">
+          <div>
+            <label>Entrez email (required by NCBI)</label>
+            <input
+              value={pubmedEmail}
+              onChange={(e) => setPubmedEmail(e.target.value)}
+              placeholder="you@institution.edu"
+              autoComplete="email"
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <label>Max articles / PMIDs</label>
+            <input
+              type="number"
+              min={1}
+              max={10000}
+              value={pubmedMax}
+              onChange={(e) => setPubmedMax(Number(e.target.value) || 50)}
+            />
+          </div>
+        </div>
+        <label style={{ display: "block", marginTop: "0.75rem" }}>PubMed query (esearch)</label>
+        <textarea
+          value={pubmedQuery}
+          onChange={(e) => setPubmedQuery(e.target.value)}
+          style={{ minHeight: "72px", fontFamily: "JetBrains Mono, monospace", width: "100%" }}
+        />
+        <div className="grid2" style={{ marginTop: "0.75rem" }}>
+          <div>
+            <label>Min abstract length (0 = off)</label>
+            <input
+              type="number"
+              min={0}
+              value={pubmedMinAbstract}
+              onChange={(e) => setPubmedMinAbstract(Number(e.target.value) || 0)}
+            />
+            <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0.35rem 0 0" }}>
+              Matches DKDM: skip very short abstracts when set (e.g. 200).
+            </p>
+          </div>
+        </div>
+        <div className="toolbar" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!isBackendConnected || pubmedBusy}
+            onClick={() => void runPubmedFetch()}
+          >
+            {pubmedBusy ? "Fetching…" : "Fetch from PubMed"}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!pubmedResult?.articles?.length}
+            onClick={() => copyPubmedToPipelineJson()}
+          >
+            Send results → pipeline JSON
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => jumpToStep("train")}
+          >
+            Back
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => jumpToStep("pipeline")}
+          >
+            Next: pipeline
+          </button>
+        </div>
+        {pubmedResult && (
+          <pre
+            className="mono"
+            style={{
+              marginTop: "0.75rem",
+              padding: "0.75rem",
+              background: "var(--bg)",
+              borderRadius: 8,
+              overflow: "auto",
+              fontSize: "0.78rem",
+              maxHeight: "240px",
+            }}
+          >
+            {JSON.stringify(pubmedResult, null, 2)}
+          </pre>
+        )}
+
+        <h4 style={{ marginTop: "1.5rem", marginBottom: "0.5rem" }}>LitSuggest comparison</h4>
+        <p style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+          Primary: your labels (e.g. from training export or <code className="mono">label</code> /{" "}
+          <code className="mono">relevant</code>). Secondary: LitSuggest <code className="mono">pmid</code> +{" "}
+          <code className="mono">score</code>. Import LitSuggest CSV or paste JSON.
+        </p>
+        <input
+          ref={litsuggestFileRef}
+          type="file"
+          accept=".csv,.xlsx,.xls,.pkl"
+          style={{ display: "none" }}
+          onChange={onLitSuggestFile}
+        />
+        <div className="toolbar" style={{ flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={compareBusy}
+            onClick={() => litsuggestFileRef.current?.click()}
+          >
+            Import LitSuggest file
+          </button>
+        </div>
+        <label style={{ display: "block", marginTop: "0.75rem" }}>Primary labels (JSON array)</label>
+        <textarea
+          value={comparePrimaryJson}
+          onChange={(e) => setComparePrimaryJson(e.target.value)}
+          style={{ minHeight: "100px", fontFamily: "JetBrains Mono, monospace", width: "100%" }}
+        />
+        <label style={{ display: "block", marginTop: "0.75rem" }}>LitSuggest scores (JSON array)</label>
+        <textarea
+          value={compareLitJson}
+          onChange={(e) => setCompareLitJson(e.target.value)}
+          style={{ minHeight: "100px", fontFamily: "JetBrains Mono, monospace", width: "100%" }}
+        />
+        <div style={{ marginTop: "0.75rem" }}>
+          <label>Score threshold for binary label (≥ = relevant)</label>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={compareThreshold}
+            onChange={(e) => setCompareThreshold(Number(e.target.value))}
+            style={{ width: "100%", maxWidth: "360px", verticalAlign: "middle" }}
+          />{" "}
+          <span className="mono">{compareThreshold.toFixed(2)}</span>
+        </div>
+        <div className="toolbar" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!isBackendConnected || compareBusy}
+            onClick={() => void runLitCompare()}
+          >
+            {compareBusy ? "Comparing…" : "Run comparison"}
+          </button>
+        </div>
+        {compareResult && (
+          <pre
+            className="mono"
+            style={{
+              marginTop: "0.75rem",
+              padding: "0.75rem",
+              background: "var(--bg)",
+              borderRadius: 8,
+              overflow: "auto",
+              fontSize: "0.78rem",
+              maxHeight: "320px",
+            }}
+          >
+            {JSON.stringify(compareResult, null, 2)}
+          </pre>
+        )}
+      </div>
+
       <div id="workspace-pipeline" className="card">
-        <h3 style={{ marginTop: 0 }}>3 · Run pipeline</h3>
+        <h3 style={{ marginTop: 0 }}>4 · Run pipeline</h3>
         <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
           Pick a trained <span className="mono">model_id</span>, choose a
           step or full workflow, then run on new abstracts (labels optional for
@@ -907,9 +1218,9 @@ export function ProjectWorkspace() {
             type="button"
             className="btn"
             disabled={busy}
-            onClick={() => jumpToStep("train")}
+            onClick={() => jumpToStep("integrations")}
           >
-            Back to train
+            Back
           </button>
         </div>
 

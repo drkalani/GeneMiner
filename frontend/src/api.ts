@@ -159,6 +159,8 @@ export interface TrainingConfig {
 export interface Article {
   pmid: string;
   text: string;
+  /** When set with abstract in `text`, backend uses BERT pair encoding (DKDM-style). */
+  title?: string | null;
   label?: number | null;
 }
 
@@ -295,6 +297,61 @@ export const api = {
     mentions_json?: Record<string, unknown>[];
   }) =>
     request<Record<string, unknown>>("/pipeline/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  pubmedFetch: (
+    projectId: string,
+    body: {
+      email: string;
+      query?: string;
+      pmids?: string[];
+      max_results?: number;
+      retstart?: number;
+      min_abstract_chars?: number;
+      sleep_between_batches?: number;
+    }
+  ) =>
+    request<{
+      queried_id_count: number;
+      search_total_estimate: number | null;
+      row_count: number;
+      articles: { pmid: string; title: string; text: string }[];
+    }>(`/projects/${projectId}/data/pubmed/fetch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  importLitSuggestScores: async (projectId: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(buildApiUrl(`/projects/${projectId}/data/import/litsuggest-scores`), {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || res.statusText);
+    }
+    return res.json() as Promise<{
+      kind: string;
+      row_count: number;
+      litsuggest: { pmid: string; score: number }[];
+    }>;
+  },
+
+  compareLitSuggest: (
+    projectId: string,
+    body: {
+      primary: Record<string, unknown>[];
+      litsuggest: Record<string, unknown>[];
+      score_threshold: number;
+    }
+  ) =>
+    request<Record<string, unknown>>(`/projects/${projectId}/data/compare/litsuggest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

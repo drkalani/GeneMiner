@@ -17,9 +17,35 @@ ExportFormat = Literal["csv", "xlsx", "pkl"]
 _ARTICLE_TEXT = ("text", "abstract", "title_abstract", "body", "content")
 _ARTICLE_PMID = ("pmid", "pm_id", "id", "article_id", "pubmed", "PMID")
 _ARTICLE_LABEL = ("label", "relevant", "y", "class", "target")
+_ARTICLE_TITLE = ("title", "article_title", "paper_title", "articletitle")
+_ARTICLE_ABSTRACT_ONLY = ("abstract",)
 
 _MENTION_PMID = ("pmid", "PMID", "id")
 _MENTION_TEXT = ("mention", "entity", "gene", "text", "word")
+
+_LITSUGEST_SCORE = (
+    "score",
+    "prediction",
+    "prob",
+    "probability",
+    "p",
+    "litsuggest_score",
+    "relevance_score",
+)
+
+
+def _normalize_pmid_cell(value: Any) -> str:
+    """Avoid '10.0' from float-like PMID cells in CSV/Excel."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    s = str(value).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        return s[:-2]
+    return s
 
 
 def _first_matching_column(df: pd.DataFrame, candidates: Tuple[str, ...]) -> Optional[str]:
@@ -59,8 +85,13 @@ def read_articles_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, An
         raise ValueError("File has no rows")
 
     col_pmid = _first_matching_column(df, _ARTICLE_PMID)
-    col_text = _first_matching_column(df, _ARTICLE_TEXT)
-    if not col_pmid or not col_text:
+    col_abstract = _first_matching_column(df, _ARTICLE_ABSTRACT_ONLY)
+    col_text_fallback = _first_matching_column(df, _ARTICLE_TEXT)
+    col_title = _first_matching_column(df, _ARTICLE_TITLE)
+
+    # Prefer a dedicated abstract column when present (DKDM-style spreadsheets).
+    col_content = col_abstract or col_text_fallback
+    if not col_pmid or not col_content:
         raise ValueError(
             "Articles file needs identifiable columns for PMID/id and text/abstract "
             f"(found columns: {list(df.columns)})"
@@ -68,12 +99,20 @@ def read_articles_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, An
     col_label = _first_matching_column(df, _ARTICLE_LABEL)
 
     out_rows: List[Dict[str, Any]] = []
+    seen_pmids: set[str] = set()
     for _, row in df.iterrows():
-        pmid = str(row[col_pmid]).strip()
-        text = str(row[col_text]).strip()
+        pmid = _normalize_pmid_cell(row[col_pmid])
+        text = str(row[col_content]).strip()
         if not pmid or not text:
             continue
+        if pmid in seen_pmids:
+            continue
+        seen_pmids.add(pmid)
         item: Dict[str, Any] = {"pmid": pmid, "text": text}
+        if col_title is not None and pd.notna(row.get(col_title)):
+            t = str(row[col_title]).strip()
+            if t:
+                item["title"] = t
         if col_label is not None and pd.notna(row[col_label]):
             try:
                 item["label"] = int(row[col_label])
@@ -141,6 +180,53 @@ def read_mentions_from_path(path: Path) -> Tuple[pd.DataFrame, List[Dict[str, An
     return pd.DataFrame(rows), rows
 
 
+def read_litsuggest_scores_from_path(
+    path: Path,
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    """Load LitSuggest-style CSV/XLSX/PKL: pmid + score column."""
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        df = pd.read_csv(path)
+    elif suffix in (".xlsx", ".xls"):
+        df = pd.read_excel(path)
+    elif suffix == ".pkl":
+        obj = pd.read_pickle(path)  # noqa: S301
+        df = obj if isinstance(obj, pd.DataFrame) else pd.DataFrame(obj)
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}. Use .csv, .xlsx, or .pkl")
+
+    df = df.dropna(how="all")
+    if df.empty:
+        raise ValueError("File has no rows")
+
+    col_pmid = _first_matching_column(df, _ARTICLE_PMID)
+    col_score = _first_matching_column(df, _LITSUGEST_SCORE)
+    if not col_pmid or not col_score:
+        raise ValueError(
+            "LitSuggest file needs pmid and score (or prediction/prob) columns "
+            f"(found: {list(df.columns)})"
+        )
+
+    out_rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, row in df.iterrows():
+        pmid = _normalize_pmid_cell(row[col_pmid])
+        if not pmid or pmid in seen:
+            continue
+        try:
+            score = float(row[col_score])
+        except (TypeError, ValueError):
+            continue
+        seen.add(pmid)
+        out_rows.append({"pmid": pmid, "score": score})
+
+    if not out_rows:
+        raise ValueError("No valid pmid/score rows after parsing")
+
+    slim = pd.DataFrame(out_rows)
+    return slim, out_rows
+
+
 def last_run_dir(project_id: str) -> Path:
     return project_dir(project_id) / "outputs" / "last_run"
 
@@ -206,8 +292,18 @@ def export_bundle_bytes(project_id: str, fmt: Literal["pkl", "xlsx"]) -> Tuple[b
 def articles_template_csv_bytes() -> bytes:
     df = pd.DataFrame(
         [
-            {"pmid": "10000001", "text": "Example abstract text.", "label": 1},
-            {"pmid": "10000002", "text": "Unrelated example text.", "label": 0},
+            {
+                "pmid": "10000001",
+                "title": "Example gene regulation in DKD",
+                "abstract": "Example abstract text.",
+                "label": 1,
+            },
+            {
+                "pmid": "10000002",
+                "title": "Weather and climate",
+                "abstract": "Unrelated example text.",
+                "label": 0,
+            },
         ]
     )
     buf = io.StringIO()

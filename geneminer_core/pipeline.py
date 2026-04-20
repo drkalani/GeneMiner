@@ -11,7 +11,7 @@ import pandas as pd
 
 from geneminer_core.ner import extract_entities, load_ner_pipeline
 from geneminer_core.normalization import normalize_mentions_df
-from geneminer_core.relevance import predict_relevance
+from geneminer_core.relevance import predict_relevance, relevance_model_input_mode
 from geneminer_core.schemas import ArticleRow
 
 
@@ -28,22 +28,35 @@ def run_classify_only(
     processor: str = "auto",
     batch_size: int = 16,
 ) -> pd.DataFrame:
+    model_path = Path(relevance_model_dir)
     texts = [a.text for a in articles]
     pmids = [a.pmid for a in articles]
-    preds, probs = predict_relevance(
-        texts,
-        relevance_model_dir,
-        device_kind=processor,
-        batch_size=batch_size,
-    )
-    return pd.DataFrame(
-        {
-            "pmid": pmids,
-            "text": texts,
-            "relevant": preds,
-            "relevance_prob": probs,
-        }
-    )
+    mode = relevance_model_input_mode(model_path)
+    if mode == "pair":
+        titles = [a.title or "" for a in articles]
+        preds, probs = predict_relevance(
+            texts,
+            model_path,
+            device_kind=processor,
+            batch_size=batch_size,
+            texts_b=titles,
+        )
+    else:
+        preds, probs = predict_relevance(
+            texts,
+            model_path,
+            device_kind=processor,
+            batch_size=batch_size,
+        )
+    row: Dict[str, Any] = {
+        "pmid": pmids,
+        "text": texts,
+        "relevant": preds,
+        "relevance_prob": probs,
+    }
+    if mode == "pair" or any(a.title for a in articles):
+        row["title"] = [a.title or "" for a in articles]
+    return pd.DataFrame(row)
 
 
 def run_ner_only(
@@ -102,10 +115,15 @@ def run_full_pipeline(
             pd.DataFrame(),
         )
 
-    sub = [
-        ArticleRow(pmid=str(r.pmid), text=str(r.text))
-        for r in rel.itertuples(index=False)
-    ]
+    sub = []
+    for r in rel.itertuples(index=False):
+        raw_title = getattr(r, "title", None)
+        title = None
+        if raw_title is not None and str(raw_title).strip() != "":
+            title = str(raw_title).strip()
+        sub.append(
+            ArticleRow(pmid=str(r.pmid), text=str(r.text), title=title)
+        )
     ner_df = run_ner_only(sub, ner_model=ner_model, processor=processor)
     if ner_df.empty:
         return df_cls, ner_df, pd.DataFrame()

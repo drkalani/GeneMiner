@@ -14,6 +14,10 @@ PipelineMode = Literal["classify", "ner", "normalize", "full"]
 class ArticleInput(BaseModel):
     pmid: str
     text: str
+    title: Optional[str] = Field(
+        None,
+        description="Optional title; when provided (DKDM-style), title+abstract pair-encoding is used.",
+    )
     label: Optional[int] = Field(None, description="0 irrelevant, 1 relevant (for training/eval)")
 
 
@@ -54,11 +58,13 @@ class TrainJobCreate(BaseModel):
     articles: List[ArticleInput]
     config: TrainingConfig = Field(default_factory=TrainingConfig)
     validation_split: float = Field(0.2, ge=0.1, le=0.4)
+    dedupe_by_pmid: bool = Field(True, description="Keep first row per PMID (DKDM-style deduplication)")
 
 
 class KFoldTrainJobCreate(BaseModel):
     articles: List[ArticleInput]
     config: KFoldTrainingConfig = Field(default_factory=KFoldTrainingConfig)
+    dedupe_by_pmid: bool = Field(True, description="Keep first row per PMID (DKDM-style deduplication)")
 
 
 class JobStatus(BaseModel):
@@ -89,3 +95,48 @@ class PipelineRunRequest(BaseModel):
 class DeviceInfo(BaseModel):
     available: Dict[str, bool]
     recommended: str
+
+
+class PubMedFetchRequest(BaseModel):
+    """NCBI E-utilities require a valid email (https://www.ncbi.nlm.nih.gov/books/NBK25497/)."""
+
+    email: str = Field(..., min_length=4, description="Contact email for NCBI Entrez")
+    query: Optional[str] = Field(
+        None,
+        description="PubMed query (esearch). Ignored if `pmids` is non-empty.",
+    )
+    pmids: Optional[List[str]] = Field(
+        None,
+        description="Explicit PMID list to fetch via efetch (skips esearch when non-empty).",
+    )
+    max_results: int = Field(200, ge=1, le=10_000, description="Max IDs from search or cap on explicit pmids")
+    retstart: int = Field(0, ge=0, description="esearch offset when using query")
+    min_abstract_chars: int = Field(
+        0,
+        ge=0,
+        le=50_000,
+        description="If > 0, drops rows with shorter abstracts (DKDM-style filter).",
+    )
+    sleep_between_batches: float = Field(
+        0.12,
+        ge=0.05,
+        le=3.0,
+        description="Pause between batched efetch calls (seconds).",
+    )
+
+
+class LitSuggestCompareRequest(BaseModel):
+    """Rows must share PMID keys. Primary: binary 0/1 labels; LitSuggest: continuous scores."""
+
+    primary: List[Dict[str, Any]] = Field(
+        ...,
+        description="Rows with pmid and label (or relevant/y) from GeneMiner or your model.",
+    )
+    litsuggest: List[Dict[str, Any]] = Field(
+        ...,
+        description="Rows with pmid and score (or prediction/prob) from LitSuggest export.",
+    )
+    score_threshold: float = Field(
+        0.5,
+        description="Scores >= threshold are treated as label 1 (DKDM-style 0.5 cutoff).",
+    )

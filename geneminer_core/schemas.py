@@ -11,6 +11,7 @@ class ArticleRow:
     pmid: str
     text: str
     label: Optional[int] = None  # 0/1 relevance, optional for inference-only
+    title: Optional[str] = None  # optional; pair-encoded with text (abstract) when training/inference use pair mode
 
 
 @dataclass
@@ -40,11 +41,16 @@ def rows_from_records(records: List[Dict[str, Any]]) -> List[ArticleRow]:
             lbl = int(lbl)
         else:
             lbl = None
+        raw_title = r.get("title")
+        title = None
+        if raw_title is not None and str(raw_title).strip() != "":
+            title = str(raw_title).strip()
         out.append(
             ArticleRow(
                 pmid=str(r["pmid"]),
                 text=str(r["text"]),
                 label=lbl,
+                title=title,
             )
         )
     return out

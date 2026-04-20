@@ -27,6 +27,7 @@ api = [
   "python-multipart>=0.0.6",
   "pydantic-settings>=2.1",
   "openpyxl>=3.1",
+  "biopython>=1.83",
 ]
 
 [tool.setuptools.packages.find]
