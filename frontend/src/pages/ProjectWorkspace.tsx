@@ -4,9 +4,14 @@ import {
   api,
   type Article,
   type LastRunInfo,
+  type DeviceInfo,
   type PipelineMode,
   type Processor,
   type TrainingConfig,
+  apiBaseDidChange,
+  getApiBase,
+  pingBackend,
+  setApiBase,
 } from "../api";
 
 const defaultTrainConfig = (): TrainingConfig => ({
@@ -89,6 +94,18 @@ export function ProjectWorkspace() {
   const [valSplit, setValSplit] = useState(0.2);
   const [kfoldSplits, setKfoldSplits] = useState(5);
   const [articlesJson, setArticlesJson] = useState(exampleArticlesJson);
+  const [backendUrl, setBackendUrl] = useState(getApiBase());
+  const [backendStatus, setBackendStatus] = useState<
+    "pending" | "checking" | "connected" | "failed"
+  >("pending");
+  const [backendStatusText, setBackendStatusText] = useState("Not checked");
+  const [backendMessage, setBackendMessage] = useState(
+    "Test backend before running training or pipeline jobs."
+  );
+  const [backendDevices, setBackendDevices] = useState<DeviceInfo | null>(null);
+  const [backendDevicesStatus, setBackendDevicesStatus] = useState<
+    "pending" | "checking" | "done" | "error"
+  >("pending");
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobPoll, setJobPoll] = useState<unknown>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -285,6 +302,53 @@ export function ProjectWorkspace() {
     }
   };
 
+  const runBackendCheck = async (candidate?: string) => {
+    setBackendStatus("checking");
+    setBackendStatusText("Checking...");
+    try {
+      await pingBackend(candidate);
+      if (candidate !== undefined) {
+        setBackendUrl(setApiBase(candidate));
+      }
+      setBackendStatus("connected");
+      setBackendStatusText("Connected");
+      setBackendMessage(
+        "Backend connected. Run system check, then start training or pipeline."
+      );
+      setErr(null);
+    } catch (err) {
+      setBackendStatus("failed");
+      setBackendStatusText((err as Error).message || "Unable to connect");
+      setBackendMessage("Save backend URL here and click save, then retry the check.");
+      setBackendDevicesStatus("pending");
+      setBackendDevices(null);
+    }
+  };
+
+  const runSystemCheck = async () => {
+    setBackendDevicesStatus("checking");
+    try {
+      const d = await api.devices();
+      setBackendDevices(d);
+      setBackendDevicesStatus("done");
+    } catch (err) {
+      setBackendDevicesStatus("error");
+      setErr((err as Error).message);
+      setBackendMessage((err as Error).message || "System check failed.");
+    }
+  };
+
+  useEffect(() => {
+    const sync = () => {
+      const next = getApiBase();
+      setBackendUrl(next);
+      void runBackendCheck(next);
+    };
+    sync();
+    const stop = apiBaseDidChange(sync);
+    return stop;
+  }, []);
+
   const applyPipelinePreset = () => {
     setProcessor("mps");
     setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
@@ -308,6 +372,51 @@ export function ProjectWorkspace() {
         <Link to="/projects">← Projects</Link>
       </p>
       <h1>Project workspace</h1>
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>Backend status</h3>
+        <p style={{ marginTop: 0, color: "var(--muted)" }}>{backendMessage}</p>
+        <p style={{ fontSize: "0.9rem", marginTop: "0.5rem" }}>
+          URL: <code className="mono">{backendUrl}</code> · Status:{" "}
+          <strong style={{ color: backendStatus === "connected" ? "var(--success)" : backendStatus === "failed" ? "var(--danger)" : "inherit" }}>
+            {backendStatusText}
+          </strong>
+        </p>
+        {backendDevices && (
+          <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
+            Recommended: {backendDevices.recommended.toUpperCase()} · CUDA:{" "}
+            {backendDevices.available.cuda ? "on" : "off"} · MPS:{" "}
+            {backendDevices.available.mps ? "on" : "off"} · CPU:{" "}
+            {backendDevices.available.cpu ? "on" : "off"}
+          </p>
+        )}
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <input
+            value={backendUrl}
+            onChange={(e) => setBackendUrl(e.target.value)}
+            style={{ maxWidth: "540px", flex: 1 }}
+            placeholder="/api or https://....ngrok-free.app/api"
+          />
+          <button
+            className="btn"
+            type="button"
+            onClick={() => runBackendCheck(backendUrl)}
+            disabled={backendStatus === "checking"}
+          >
+            Save & test
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={runSystemCheck}
+            disabled={backendStatus !== "connected" || backendDevicesStatus === "checking"}
+          >
+            Check system
+          </button>
+        </div>
+        <div style={{ fontSize: "0.8rem", marginTop: "0.5rem", color: "var(--muted)" }}>
+          {backendDevicesStatus === "checking" ? "Checking devices..." : backendDevicesStatus === "done" ? "System check done." : ""}
+        </div>
+      </div>
       <p className="mono" style={{ color: "var(--muted)" }}>
         {projectId}
       </p>

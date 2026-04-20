@@ -1,5 +1,78 @@
-const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
-const BASE = API_BASE === "" ? "/api" : API_BASE;
+const STORAGE_KEY = "geneminer-api-base";
+const DEFAULT_API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
+const FALLBACK_API_BASE = "/api";
+const API_BASE_CHANGED = "geneminer:api-base-changed";
+
+const sanitizeBase = (value: string): string => {
+  let base = (value || "").trim().replace(/\/$/, "");
+  if (!base) {
+    return DEFAULT_API_BASE || FALLBACK_API_BASE;
+  }
+  if (base.startsWith("/")) {
+    return base || FALLBACK_API_BASE;
+  }
+  if (!/^[a-z][a-z0-9+\-.]*:\/\//i.test(base)) {
+    base = `https://${base}`;
+  }
+  return base;
+};
+
+const getStoredApiBase = (): string => {
+  if (typeof window === "undefined") {
+    return sanitizeBase(DEFAULT_API_BASE);
+  }
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored && stored.trim()) {
+      return sanitizeBase(stored);
+    }
+  } catch {
+    // storage may be unavailable in some environments
+  }
+  return sanitizeBase(DEFAULT_API_BASE);
+};
+
+let runtimeApiBase = getStoredApiBase();
+
+const normalizePath = (path: string): string => {
+  return path.startsWith("/") ? path : `/${path}`;
+};
+
+const buildApiUrl = (path: string): string => `${getApiBase()}${normalizePath(path)}`;
+
+export const getApiBase = (): string => runtimeApiBase;
+
+export const setApiBase = (candidate: string): string => {
+  const next = sanitizeBase(candidate);
+  runtimeApiBase = next;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, next);
+    window.dispatchEvent(new Event(API_BASE_CHANGED));
+  } catch {
+    // no-op if storage is not available
+  }
+  return next;
+};
+
+export const resetApiBase = (): string => setApiBase(DEFAULT_API_BASE);
+
+export const apiBaseDidChange = (listener: () => void): (() => void) => {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handler = () => listener();
+  window.addEventListener(API_BASE_CHANGED, handler);
+  return () => window.removeEventListener(API_BASE_CHANGED, handler);
+};
+
+export const pingBackend = (candidateBase?: string): Promise<{ status: string }> => {
+  const targetBase = candidateBase ? sanitizeBase(candidateBase) : getApiBase();
+  const url = `${targetBase}/health`;
+  return parse<{ status: string }>(fetch(url));
+};
+
+export const isColabCandidate = (value: string): boolean =>
+  /^(https?:\/\/)?[^/]+ngrok(app)?(-(free))?\.(io|app)/i.test(value.trim());
 
 async function parse<T>(res: Response | Promise<Response>): Promise<T> {
   const response = await res;
@@ -10,8 +83,12 @@ async function parse<T>(res: Response | Promise<Response>): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function triggerDownload(url: string, fallbackName: string): Promise<void> {
-  const response = await fetch(url);
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return parse<T>(fetch(buildApiUrl(path), init));
+}
+
+async function triggerDownload(path: string, fallbackName: string): Promise<void> {
+  const response = await fetch(buildApiUrl(path));
   if (!response.ok) {
     const t = await response.text();
     throw new Error(t || response.statusText);
@@ -77,29 +154,25 @@ export interface Article {
 }
 
 export const api = {
-  health: () => parse<{ status: string }>(fetch(`${BASE}/health`)),
+  health: () => request<{ status: string }>("/health"),
 
-  devices: () => parse<DeviceInfo>(fetch(`${BASE}/devices`)),
+  devices: () => request<DeviceInfo>("/devices"),
 
-  listProjects: () => parse<Project[]>(fetch(`${BASE}/projects`)),
+  listProjects: () => request<Project[]>("/projects"),
 
   createProject: (body: {
     name: string;
     disease_key: string;
     description?: string;
   }) =>
-    parse<Project>(
-      fetch(`${BASE}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-    ),
+    request<Project>("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   listModels: (projectId: string) =>
-    parse<{ models: string[] }>(
-      fetch(`${BASE}/projects/${projectId}/models`)
-    ),
+    request<{ models: string[] }>(`/projects/${projectId}/models`),
 
   trainRelevance: (
     projectId: string,
@@ -107,49 +180,45 @@ export const api = {
     config: TrainingConfig,
     validation_split: number
   ) =>
-    parse<{ job_id: string; state: string }>(
-      fetch(`${BASE}/train/${projectId}/relevance`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          articles,
-          config,
-          validation_split,
-        }),
-      })
-    ),
+    request<{ job_id: string; state: string }>(`/train/${projectId}/relevance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        articles,
+        config,
+        validation_split,
+      }),
+    }),
 
   trainKfold: (
     projectId: string,
     articles: Article[],
     config: TrainingConfig & { n_splits: number }
   ) =>
-    parse<{ job_id: string; state: string }>(
-      fetch(`${BASE}/train/${projectId}/relevance/kfold`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ articles, config }),
-      })
-    ),
+    request<{ job_id: string; state: string }>(`/train/${projectId}/relevance/kfold`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ articles, config }),
+    }),
 
   jobStatus: (jobId: string) =>
-    parse<{
+    request<{
       job_id: string;
       state: string;
       message: string;
       result: unknown;
-    }>(fetch(`${BASE}/train/jobs/${jobId}`)),
+    }>(`/train/jobs/${jobId}`),
 
   lastRun: (projectId: string) =>
-    parse<LastRunInfo>(fetch(`${BASE}/projects/${projectId}/data/last-run`)),
+    request<LastRunInfo>(`/projects/${projectId}/data/last-run`),
 
   importArticles: async (projectId: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(
-      `${BASE}/projects/${projectId}/data/import/articles`,
-      { method: "POST", body: fd }
-    );
+    const res = await fetch(buildApiUrl(`/projects/${projectId}/data/import/articles`), {
+      method: "POST",
+      body: fd,
+    });
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || res.statusText);
@@ -164,10 +233,10 @@ export const api = {
   importMentions: async (projectId: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(
-      `${BASE}/projects/${projectId}/data/import/mentions`,
-      { method: "POST", body: fd }
-    );
+    const res = await fetch(buildApiUrl(`/projects/${projectId}/data/import/mentions`), {
+      method: "POST",
+      body: fd,
+    });
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || res.statusText);
@@ -185,14 +254,11 @@ export const api = {
     format: ExportFormat,
     fallbackName: string
   ) =>
-    triggerDownload(
-      `${BASE}/projects/${projectId}/data/export/${artifact}?format=${format}`,
-      fallbackName
-    ),
+    triggerDownload(`/projects/${projectId}/data/export/${artifact}?format=${format}`, fallbackName),
 
   downloadTemplate: (projectId: string, kind: "articles" | "mentions") =>
     triggerDownload(
-      `${BASE}/projects/${projectId}/data/templates/${kind}`,
+      `/projects/${projectId}/data/templates/${kind}`,
       kind === "articles" ? "articles_template.csv" : "mentions_template.csv"
     ),
 
@@ -207,11 +273,9 @@ export const api = {
     use_wikipedia_fallback: boolean;
     mentions_json?: Record<string, unknown>[];
   }) =>
-    parse<Record<string, unknown>>(
-      fetch(`${BASE}/pipeline/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-    ),
+    request<Record<string, unknown>>("/pipeline/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 };
