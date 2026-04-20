@@ -7,6 +7,7 @@ import {
   type ImportStats,
   type DeviceInfo,
   type ProjectModelCatalog,
+  type JobRecord,
   type ModelCompatibilityResult,
   type PipelineMode,
   type Processor,
@@ -79,6 +80,75 @@ type ClassificationRow = {
 type WorkspaceStep = "backend" | "train" | "integrations" | "pipeline";
 
 const makeProjectJobStateKey = (projectId: string) => `geneminer-job-state:${projectId}`;
+const makeProjectWorkspaceStateKey = (projectId: string) =>
+  `geneminer-workspace-state:${projectId}`;
+const WORKSPACE_STATE_VERSION = 1;
+
+const isWorkspaceStep = (value: unknown): value is WorkspaceStep => {
+  return (
+    value === "backend" ||
+    value === "train" ||
+    value === "integrations" ||
+    value === "pipeline"
+  );
+};
+
+const isPipelineMode = (value: unknown): value is PipelineMode => {
+  return (
+    value === "full" ||
+    value === "classify" ||
+    value === "ner" ||
+    value === "normalize"
+  );
+};
+
+const isProcessor = (value: unknown): value is Processor => {
+  return value === "auto" || value === "cuda" || value === "mps" || value === "cpu";
+};
+
+const toStoredString = (value: unknown, fallback: string): string =>
+  typeof value === "string" ? value : fallback;
+
+const toStoredNumber = (value: unknown, fallback: number): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+const toStoredBoolean = (value: unknown, fallback: boolean): boolean =>
+  typeof value === "boolean" ? value : fallback;
+
+const toStoredNumberFromString = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+};
+
+type PersistedWorkspaceState = {
+  version: number;
+  articlesJson: string;
+  pipeJson: string;
+  normJson: string;
+  trainCfg: TrainingConfig;
+  valSplit: number;
+  kfoldSplits: number;
+  modelId: string;
+  mode: PipelineMode;
+  processor: Processor;
+  nerModel: string;
+  pipeBatchSize: number;
+  pipeUseWikipedia: boolean;
+  relevanceThreshold: number;
+  baseModelToDownload: string;
+  comparePrimaryJson: string;
+  compareLitJson: string;
+  compareThreshold: number;
+  pubmedEmail: string;
+  pubmedQuery: string;
+  pubmedMax: number;
+  pubmedMinAbstract: number;
+  activeStep: WorkspaceStep;
+};
 
 const toNumberOrNull = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -214,6 +284,8 @@ export function ProjectWorkspace() {
   >("pending");
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobPoll, setJobPoll] = useState<unknown>(null);
+  const [jobHistory, setJobHistory] = useState<JobRecord[]>([]);
+  const [showOnlyJobsWithResult, setShowOnlyJobsWithResult] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -277,6 +349,8 @@ export function ProjectWorkspace() {
   });
 
   const isBackendConnected = backendStatus === "connected";
+  const workspaceDraftSaveTimer = useRef<number | null>(null);
+  const workspaceStateRestoredRef = useRef(false);
   const rememberRunningJob = (nextJobId: string | null) => {
     if (!projectId) return;
     const key = makeProjectJobStateKey(projectId);
@@ -286,6 +360,149 @@ export function ProjectWorkspace() {
       localStorage.removeItem(key);
     }
     setJobId(nextJobId);
+  };
+
+  const refreshJobHistory = async (): Promise<JobRecord[] | null> => {
+    if (!projectId || !isBackendConnected) return null;
+    try {
+      const recent = await api.listJobs(projectId, 20);
+      setJobHistory(recent);
+      return recent;
+    } catch {
+      setJobHistory([]);
+      return null;
+    }
+  };
+
+  const restoreWorkspaceDraft = () => {
+    if (!projectId) return;
+    const key = makeProjectWorkspaceStateKey(projectId);
+    const raw = localStorage.getItem(key);
+    const fallbackCfg = defaultTrainConfig();
+    workspaceStateRestoredRef.current = false;
+
+    if (!raw) {
+      workspaceStateRestoredRef.current = true;
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<PersistedWorkspaceState>;
+      if (typeof parsed.version === "number" && parsed.version >= 1) {
+        if (typeof parsed.articlesJson === "string") setArticlesJson(parsed.articlesJson);
+        if (typeof parsed.pipeJson === "string") setPipeJson(parsed.pipeJson);
+        if (typeof parsed.normJson === "string") setNormJson(parsed.normJson);
+        if (typeof parsed.comparePrimaryJson === "string") setComparePrimaryJson(parsed.comparePrimaryJson);
+        if (typeof parsed.compareLitJson === "string") setCompareLitJson(parsed.compareLitJson);
+        if (typeof parsed.pubmedEmail === "string") setPubmedEmail(parsed.pubmedEmail);
+        if (typeof parsed.pubmedQuery === "string") setPubmedQuery(parsed.pubmedQuery);
+
+        const restoredTrainCfg = typeof parsed.trainCfg === "object" && parsed.trainCfg !== null
+          ? {
+              ...fallbackCfg,
+              ...parsed.trainCfg,
+              processor: isProcessor((parsed.trainCfg as Record<string, unknown>).processor)
+                ? ((parsed.trainCfg as Record<string, unknown>).processor as Processor)
+                : fallbackCfg.processor,
+              fp16:
+                (parsed.trainCfg as Record<string, unknown>).fp16 === null ||
+                typeof (parsed.trainCfg as Record<string, unknown>).fp16 === "boolean"
+                  ? ((parsed.trainCfg as Record<string, unknown>).fp16 as null | boolean)
+                  : fallbackCfg.fp16,
+            }
+          : fallbackCfg;
+        setTrainCfg(restoredTrainCfg);
+
+        setValSplit(toStoredNumberFromString(parsed.valSplit, 0.2));
+        setKfoldSplits(Math.max(2, Math.round(toStoredNumber(parsed.kfoldSplits, 5))));
+        setModelId(toStoredString(parsed.modelId, ""));
+        setMode(isPipelineMode(parsed.mode) ? parsed.mode : "full");
+        setProcessor(isProcessor(parsed.processor) ? parsed.processor : "auto");
+        setNerModel(toStoredString(parsed.nerModel, "pruas/BENT-PubMedBERT-NER-Gene"));
+        setPipeBatchSize(Math.max(1, Math.round(toStoredNumber(parsed.pipeBatchSize, 4))));
+        setPipeUseWikipedia(toStoredBoolean(parsed.pipeUseWikipedia, true));
+        setRelevanceThreshold(
+          toStoredNumberFromString(parsed.relevanceThreshold, 0.5)
+        );
+        setBaseModelToDownload(toStoredString(parsed.baseModelToDownload, ""));
+        setCompareThreshold(toStoredNumberFromString(parsed.compareThreshold, 0.5));
+        setPubmedMax(Math.max(1, Math.round(toStoredNumber(parsed.pubmedMax, 50))));
+        setPubmedMinAbstract(Math.max(0, Math.round(toStoredNumber(parsed.pubmedMinAbstract, 0))));
+        setActiveStep(isWorkspaceStep(parsed.activeStep) ? parsed.activeStep : "backend");
+      }
+    } catch {
+      // keep defaults on parse issues
+    }
+    workspaceStateRestoredRef.current = true;
+  };
+
+  const resetWorkspaceDraft = () => {
+    if (!projectId) return;
+    if (!window.confirm("Reset workspace draft for this project?")) {
+      return;
+    }
+    const draftKey = makeProjectWorkspaceStateKey(projectId);
+    localStorage.removeItem(draftKey);
+    setArticlesJson(exampleArticlesJson);
+    setPipeJson(examplePipelineArticlesJson);
+    setNormJson(`[{"pmid":"1","mention":"TGFB1","start":0,"end":5}]`);
+    setComparePrimaryJson(exampleComparePrimary);
+    setCompareLitJson(exampleCompareLitSuggest);
+    setPubmedEmail("");
+    setPubmedQuery('("diabetic kidney disease"[Title/Abstract]) AND 2020:2024[dp]');
+    setTrainCfg(defaultTrainConfig());
+    setValSplit(0.2);
+    setKfoldSplits(5);
+    setModelId("");
+    setMode("full");
+    setProcessor("auto");
+    setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
+    setPipeBatchSize(4);
+    setPipeUseWikipedia(true);
+    setRelevanceThreshold(0.5);
+    setBaseModelToDownload("");
+    setCompareThreshold(0.5);
+    setPubmedMax(50);
+    setPubmedMinAbstract(0);
+    setActiveStep("backend");
+    setImportNotice(null);
+    setCompareResult(null);
+    setPubmedResult(null);
+  };
+
+  const saveWorkspaceDraft = () => {
+    if (!projectId || !workspaceStateRestoredRef.current) return;
+    if (workspaceDraftSaveTimer.current) {
+      window.clearTimeout(workspaceDraftSaveTimer.current);
+    }
+    workspaceDraftSaveTimer.current = window.setTimeout(() => {
+      const payload: PersistedWorkspaceState = {
+        version: WORKSPACE_STATE_VERSION,
+        articlesJson,
+        pipeJson,
+        normJson,
+        trainCfg,
+        valSplit,
+        kfoldSplits,
+        modelId,
+        mode,
+        processor,
+        nerModel,
+        pipeBatchSize,
+        pipeUseWikipedia,
+        relevanceThreshold,
+        baseModelToDownload,
+        comparePrimaryJson,
+        compareLitJson,
+        compareThreshold,
+        pubmedEmail,
+        pubmedQuery,
+        pubmedMax,
+        pubmedMinAbstract,
+        activeStep,
+      };
+      localStorage.setItem(makeProjectWorkspaceStateKey(projectId), JSON.stringify(payload));
+    }, 350);
   };
 
   const checkBaseModelCompatibility = async (
@@ -449,18 +666,32 @@ export function ProjectWorkspace() {
     const key = makeProjectJobStateKey(projectId);
     try {
       const recent = await api.listJobs(projectId, 20);
+      setJobHistory(recent);
       const runningJob = recent.find((j) => isJobStateRunning(j.state));
+      const completedJobWithResult = recent.find(
+        (j) => isJobStateTerminal(j.state) && j.result !== null && j.result !== undefined
+      );
       const jobToCheck = runningJob?.job_id || localStorage.getItem(key);
-      if (!jobToCheck) return;
-      const status = await api.jobStatus(jobToCheck);
-      setJobPoll(status);
-      rememberRunningJob(status.job_id);
-      if (!isJobStateRunning((status as { state?: unknown }).state)) {
-        if (isJobStateTerminal((status as { state?: unknown }).state)) {
+      if (jobToCheck) {
+        try {
+          const status = await api.jobStatus(jobToCheck);
+          setJobPoll(status);
+          setJobId(status.job_id);
+          if (!isJobStateRunning((status as { state?: unknown }).state)) {
+            rememberRunningJob(null);
+          }
+          return;
+        } catch {
+          localStorage.removeItem(key);
           rememberRunningJob(null);
         }
       }
+      if (!completedJobWithResult) return;
+      setJobPoll(completedJobWithResult);
+      setJobId(completedJobWithResult.job_id);
+      rememberRunningJob(null);
     } catch {
+      setJobHistory([]);
       localStorage.removeItem(key);
       setJobPoll(null);
       rememberRunningJob(null);
@@ -504,7 +735,40 @@ export function ProjectWorkspace() {
       </div>
     );
   };
+  const jobState = (() => {
+    if (typeof jobPoll !== "object" || jobPoll === null) return "";
+    if (!("state" in jobPoll)) return "";
+    const rawState = (jobPoll as { state?: unknown }).state;
+    return typeof rawState === "string" ? rawState.toLowerCase() : "";
+  })();
 
+  const jobProgressPercent = (() => {
+    if (typeof jobPoll !== "object" || jobPoll === null) return null;
+    if (!("progress" in jobPoll)) return null;
+    return toPercentOrNull((jobPoll as { progress?: unknown }).progress);
+  })();
+
+  const isJobRunning = Boolean(
+    isJobStateRunning(jobState) &&
+      (typeof jobPoll === "object" && jobPoll !== null)
+  );
+
+  const jobRemainingSeconds = (() => {
+    if (!isJobRunning || jobProgressPercent === null) return null;
+    if (jobProgressPercent <= 0.1) return null;
+    const createdAt = (() => {
+      if (typeof jobPoll !== "object" || jobPoll === null) return null;
+      if (!("created_at" in jobPoll)) return null;
+      return toEpochMsOrNull((jobPoll as { created_at?: unknown }).created_at);
+    })();
+    if (createdAt === null) return null;
+    const elapsedSec = Math.max(0, (Date.now() - createdAt) / 1000);
+    if (elapsedSec <= 0) return null;
+    const progressRatio = jobProgressPercent / 100;
+    if (!progressRatio || !Number.isFinite(progressRatio)) return null;
+    const estimatedTotalSec = elapsedSec / progressRatio;
+    return Math.max(0, Math.round(estimatedTotalSec - elapsedSec));
+  })();
   const renderModelCheckMessage = (check: ModelCheckState) => {
     if (!check.message) return null;
     const color =
@@ -591,8 +855,48 @@ export function ProjectWorkspace() {
   }, [projectId]);
 
   useEffect(() => {
+    restoreWorkspaceDraft();
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId || !workspaceStateRestoredRef.current) return;
+    saveWorkspaceDraft();
+    return () => {
+      if (workspaceDraftSaveTimer.current) {
+        window.clearTimeout(workspaceDraftSaveTimer.current);
+        workspaceDraftSaveTimer.current = null;
+      }
+    };
+  }, [
+    projectId,
+    articlesJson,
+    pipeJson,
+    normJson,
+    trainCfg,
+    valSplit,
+    kfoldSplits,
+    modelId,
+    mode,
+    processor,
+    nerModel,
+    pipeBatchSize,
+    pipeUseWikipedia,
+    relevanceThreshold,
+    baseModelToDownload,
+    comparePrimaryJson,
+    compareLitJson,
+    compareThreshold,
+    pubmedEmail,
+    pubmedQuery,
+    pubmedMax,
+    pubmedMinAbstract,
+    activeStep,
+  ]);
+
+  useEffect(() => {
     if (!isBackendConnected) return;
     void restoreRunningJob();
+    void refreshJobHistory();
   }, [isBackendConnected, projectId]);
 
   useEffect(() => {
@@ -612,7 +916,7 @@ export function ProjectWorkspace() {
   }, [nerModel, isBackendConnected]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || !isJobStateRunning(jobState)) return;
     const t = setInterval(() => {
       api
         .jobStatus(jobId)
@@ -621,17 +925,19 @@ export function ProjectWorkspace() {
           if (j.state === "completed" || j.state === "failed") {
             clearInterval(t);
             refreshModels();
+            void refreshJobHistory();
             rememberRunningJob(null);
           }
         })
         .catch(() => {
           clearInterval(t);
+          void refreshJobHistory();
           rememberRunningJob(null);
           setJobPoll(null);
         });
     }, 1500);
     return () => clearInterval(t);
-  }, [jobId]);
+  }, [jobId, jobState]);
 
   const parseArticles = (): Article[] => {
     const raw = JSON.parse(articlesJson) as Article[];
@@ -650,42 +956,6 @@ export function ProjectWorkspace() {
       };
     });
   };
-
-  const jobState = (() => {
-    if (typeof jobPoll !== "object" || jobPoll === null) return "";
-    if (!("state" in jobPoll)) return "";
-    const rawState = (jobPoll as { state?: unknown }).state;
-    return typeof rawState === "string" ? rawState.toLowerCase() : "";
-  })();
-
-  const jobProgressPercent = (() => {
-    if (typeof jobPoll !== "object" || jobPoll === null) return null;
-    if (!("progress" in jobPoll)) return null;
-    return toPercentOrNull((jobPoll as { progress?: unknown }).progress);
-  })();
-
-  const isJobRunning = Boolean(
-    jobId &&
-      isJobStateRunning(jobState) &&
-      (typeof jobPoll === "object" && jobPoll !== null)
-  );
-
-  const jobRemainingSeconds = (() => {
-    if (!isJobRunning || jobProgressPercent === null) return null;
-    if (jobProgressPercent <= 0.1) return null;
-    const createdAt = (() => {
-      if (typeof jobPoll !== "object" || jobPoll === null) return null;
-      if (!("created_at" in jobPoll)) return null;
-      return toEpochMsOrNull((jobPoll as { created_at?: unknown }).created_at);
-    })();
-    if (createdAt === null) return null;
-    const elapsedSec = Math.max(0, (Date.now() - createdAt) / 1000);
-    if (elapsedSec <= 0) return null;
-    const progressRatio = jobProgressPercent / 100;
-    if (!progressRatio || !Number.isFinite(progressRatio)) return null;
-    const estimatedTotalSec = elapsedSec / progressRatio;
-    return Math.max(0, Math.round(estimatedTotalSec - elapsedSec));
-  })();
 
   const jobRemainingText =
     jobRemainingSeconds === null ? null : formatSecondsAsHuman(jobRemainingSeconds);
@@ -730,6 +1000,7 @@ export function ProjectWorkspace() {
       const status = await api.jobStatus(res.job_id);
       setJobPoll(status);
       rememberRunningJob(res.job_id);
+      void refreshJobHistory();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -981,6 +1252,7 @@ export function ProjectWorkspace() {
       void refreshModels();
       void refreshLastRun();
       void restoreRunningJob();
+      void refreshJobHistory();
     } catch (err) {
       setBackendStatus("failed");
       setBackendStatusText((err as Error).message || "Unable to connect");
@@ -988,6 +1260,7 @@ export function ProjectWorkspace() {
       setBackendDevicesStatus("pending");
       setBackendDevices(null);
       setAvailableBaseModels([]);
+      setJobHistory([]);
     }
   };
 
@@ -1024,12 +1297,39 @@ export function ProjectWorkspace() {
     setRelevanceThreshold(0.5);
   };
 
+  const jobHasResult = (result: JobRecord["result"]) => {
+    if (result === null || result === undefined) return false;
+    if (Array.isArray(result)) return result.length > 0;
+    if (typeof result === "object") return Object.keys(result).length > 0;
+    return true;
+  };
+
   const classificationRows = pipeResult ? getClassificationRows(pipeResult) : [];
   const filteredClassificationRows = classificationRows.filter((row) => {
     const prob = toNumberOrNull(row.relevance_prob);
     if (prob === null) return false;
     return prob >= relevanceThreshold;
   });
+  const filteredJobsForHistory = jobHistory.filter((job) =>
+    showOnlyJobsWithResult
+      ? isJobStateTerminal(job.state) && jobHasResult(job.result)
+      : true
+  );
+  const recentJobHistory = filteredJobsForHistory.slice(0, 10);
+  const formatEpochLabel = (value: string) => {
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) return value;
+    return new Date(parsed).toLocaleString();
+  };
+  const pickJob = (job: JobRecord) => {
+    setJobPoll(job);
+    setJobId(job.job_id);
+    if (!isJobStateRunning(job.state)) {
+      rememberRunningJob(null);
+    } else {
+      rememberRunningJob(job.job_id);
+    }
+  };
 
   return (
     <div>
@@ -1083,6 +1383,14 @@ export function ProjectWorkspace() {
         <Link to={`/jobs${projectId ? `?projectId=${projectId}` : ""}`} className="btn btn-primary">
           Open job center
         </Link>
+        <button
+          type="button"
+          className="btn"
+          onClick={resetWorkspaceDraft}
+          disabled={busy}
+        >
+          Reset workspace draft
+        </button>
         {!isBackendConnected && (
           <p style={{ margin: 0, color: "var(--warning)" }}>
             Backend is not connected. Connect first before training/pipeline.
@@ -1455,7 +1763,7 @@ export function ProjectWorkspace() {
           </button>
         </div>
 
-        {jobId && (
+        {jobPoll && (
           <div style={{ marginTop: "1rem" }}>
             <span className="tag">job {jobId}</span>
             {jobMessage && <div className="tag" style={{ marginLeft: "0.5rem" }}>{jobMessage}</div>}
@@ -1506,6 +1814,84 @@ export function ProjectWorkspace() {
             >
               {JSON.stringify(jobPoll, null, 2)}
             </pre>
+          </div>
+        )}
+
+        {jobHistory.length > 0 && (
+          <div style={{ marginTop: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+              <h4 style={{ margin: 0 }}>Recent jobs</h4>
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  color: "var(--muted)",
+                  fontSize: "0.84rem",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showOnlyJobsWithResult}
+                  onChange={(event) => setShowOnlyJobsWithResult(event.target.checked)}
+                />
+                show only completed jobs with result
+              </label>
+            </div>
+            {recentJobHistory.length === 0 ? (
+              <p style={{ color: "var(--muted)", margin: 0 }}>
+                No jobs match the selected history filter.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                {recentJobHistory.map((job) => {
+                  const isCurrent = job.job_id === jobId;
+                  return (
+                    <div
+                      key={job.job_id}
+                      className="card"
+                      style={{
+                        borderColor: isCurrent ? "var(--accent)" : "var(--card-border)",
+                        padding: "0.55rem 0.65rem",
+                      }}
+                    >
+                      <div
+                        style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", flexWrap: "wrap" }}
+                      >
+                        <div>
+                          <div className="mono">
+                            {job.job_id.slice(0, 8)} · {job.state.toUpperCase()}
+                          </div>
+                          <div className="tag" style={{ marginTop: "0.35rem" }}>
+                            {formatEpochLabel(job.created_at)}{" "}
+                            {isCurrent ? "· current view" : ""}
+                          </div>
+                          {job.message ? (
+                            <div className="tag" style={{ marginTop: "0.35rem" }}>
+                              {job.message}
+                            </div>
+                          ) : null}
+                          {job.result !== undefined ? (
+                            <div className="tag" style={{ marginTop: "0.35rem", opacity: 0.85 }}>
+                              result: {jobHasResult(job.result) ? "yes" : "no"}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => pickJob(job)}
+                          >
+                            Show
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
