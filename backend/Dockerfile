@@ -4,7 +4,7 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
+    PYTHONPATH=/app/backend:/app \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
@@ -17,7 +17,11 @@ COPY geneminer_core /app/geneminer_core
 COPY backend /app/backend
 
 RUN pip install --upgrade pip \
-    && pip install -e ".[api]"
+    && PIP_INDEX_URL=https://download.pytorch.org/whl/cpu \
+       PIP_EXTRA_INDEX_URL=https://pypi.org/simple \
+       pip install -e ".[api]"
+
+WORKDIR /app/backend
 
 EXPOSE 8000
 
