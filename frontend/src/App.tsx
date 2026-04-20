@@ -1,6 +1,6 @@
 import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { HomePage, ProjectsPage, ProjectWorkspace } from "./pages";
+import { HomePage, JobsPage, ProjectsPage, ProjectWorkspace } from "./pages";
 import { apiBaseDidChange, getApiBase, isColabCandidate, pingBackend, setApiBase } from "./api";
 
 type BackendStatus = "unknown" | "checking" | "connected" | "failed";
@@ -117,6 +117,7 @@ function Layout({ children }: { children: ReactNode }) {
           <nav style={{ display: "flex", gap: "1.25rem" }}>
             <Link to="/">Overview</Link>
             <Link to="/projects">Projects</Link>
+            <Link to="/jobs">Job center</Link>
           </nav>
         </div>
       </header>
@@ -135,6 +136,7 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/projects/:id" element={<ProjectWorkspace />} />
+        <Route path="/jobs" element={<JobsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

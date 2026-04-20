@@ -68,6 +68,11 @@ class JobStatus(BaseModel):
     result: Optional[Dict[str, Any]] = None
 
 
+class JobSummary(JobStatus):
+    project_id: Optional[str] = None
+    created_at: str = ""
+
+
 class PipelineRunRequest(BaseModel):
     project_id: str
     model_id: str = Field(..., description="Trained relevance model folder name under project")

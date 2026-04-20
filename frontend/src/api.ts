@@ -122,6 +122,15 @@ export interface DeviceInfo {
   recommended: string;
 }
 
+export interface JobRecord {
+  job_id: string;
+  state: "queued" | "running" | "completed" | "failed";
+  message: string;
+  project_id: string | null;
+  created_at: string;
+  result?: Record<string, unknown> | null;
+}
+
 export interface LastRunInfo {
   path: string | null;
   files: string[];
@@ -208,6 +217,18 @@ export const api = {
       message: string;
       result: unknown;
     }>(`/train/jobs/${jobId}`),
+
+  listJobs: (projectId?: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (projectId) {
+      params.set("project_id", projectId);
+    }
+    if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
+      params.set("limit", `${limit}`);
+    }
+    const query = params.toString();
+    return request<JobRecord[]>(`/train/jobs${query ? `?${query}` : ""}`);
+  },
 
   lastRun: (projectId: string) =>
     request<LastRunInfo>(`/projects/${projectId}/data/last-run`),

@@ -138,6 +138,8 @@ Importable Python package `geneminer_core` (installed with `pip install -e .`):
 | GET | `/projects/{id}/models` | List trained model folders |
 | POST | `/train/{id}/relevance` | Start training job (background) |
 | POST | `/train/{id}/relevance/kfold` | Start k-fold job |
+| GET | `/train/jobs` | List recent jobs (optional `project_id` filter) |
+| GET | `/train/jobs` | List recent jobs (optional `project_id`, `limit`) |
 | GET | `/train/jobs/{job_id}` | Poll job status + metrics |
 | POST | `/pipeline/run` | Run classify / ner / normalize / full |
 | GET | `/projects/{id}/data/last-run` | List files in `outputs/last_run` |

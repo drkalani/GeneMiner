@@ -221,6 +221,9 @@ export function HomePage() {
           <button className="btn" type="button" onClick={copyExample}>
             Copy ngrok example
           </button>
+          <Link className="btn" to="/jobs">
+            Open job center
+          </Link>
           <Link className="btn btn-primary" to="/projects">
             Open projects
           </Link>

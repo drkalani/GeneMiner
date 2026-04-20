@@ -56,6 +56,8 @@ type ClassificationRow = {
   relevance_prob?: number;
 };
 
+type WorkspaceStep = "backend" | "train" | "pipeline";
+
 const toNumberOrNull = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -110,6 +112,7 @@ export function ProjectWorkspace() {
   const [jobPoll, setJobPoll] = useState<unknown>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [activeStep, setActiveStep] = useState<WorkspaceStep>("backend");
 
   const [modelId, setModelId] = useState("");
   const [mode, setMode] = useState<PipelineMode>("full");
@@ -129,6 +132,14 @@ export function ProjectWorkspace() {
   const trainFileRef = useRef<HTMLInputElement>(null);
   const pipeFileRef = useRef<HTMLInputElement>(null);
   const mentionFileRef = useRef<HTMLInputElement>(null);
+
+  const isBackendConnected = backendStatus === "connected";
+
+  const jumpToStep = (step: WorkspaceStep) => {
+    setActiveStep(step);
+    const node = document.getElementById(`workspace-${step}`);
+    node?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const refreshLastRun = () => {
     if (!projectId) return;
@@ -372,7 +383,49 @@ export function ProjectWorkspace() {
         <Link to="/projects">← Projects</Link>
       </p>
       <h1>Project workspace</h1>
-      <div className="card">
+      <div className="steps">
+        <a
+          href="#workspace-backend"
+          onClick={(e) => {
+            e.preventDefault();
+            jumpToStep("backend");
+          }}
+          className={activeStep === "backend" ? "step-pill active" : "step-pill"}
+        >
+          1 · Backend
+        </a>
+        <a
+          href="#workspace-train"
+          onClick={(e) => {
+            e.preventDefault();
+            jumpToStep("train");
+          }}
+          className={activeStep === "train" ? "step-pill active" : "step-pill"}
+        >
+          2 · Train
+        </a>
+        <a
+          href="#workspace-pipeline"
+          onClick={(e) => {
+            e.preventDefault();
+            jumpToStep("pipeline");
+          }}
+          className={activeStep === "pipeline" ? "step-pill active" : "step-pill"}
+        >
+          3 · Pipeline
+        </a>
+      </div>
+      <div className="toolbar" style={{ marginBottom: "1rem" }}>
+        <Link to={`/jobs${projectId ? `?projectId=${projectId}` : ""}`} className="btn btn-primary">
+          Open job center
+        </Link>
+        {!isBackendConnected && (
+          <p style={{ margin: 0, color: "var(--warning)" }}>
+            Backend is not connected. Connect first before training/pipeline.
+          </p>
+        )}
+      </div>
+      <div id="workspace-backend" className="card">
         <h3 style={{ marginTop: 0 }}>Backend status</h3>
         <p style={{ marginTop: 0, color: "var(--muted)" }}>{backendMessage}</p>
         <p style={{ fontSize: "0.9rem", marginTop: "0.5rem" }}>
@@ -430,7 +483,7 @@ export function ProjectWorkspace() {
         </div>
       )}
 
-      <div className="card">
+      <div id="workspace-train" className="card">
         <h3 style={{ marginTop: 0 }}>1 · Train relevance (BioBERT)</h3>
         <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
           Paste JSON array of objects:{" "}
@@ -626,7 +679,7 @@ export function ProjectWorkspace() {
           <button
             type="button"
             className="btn"
-            disabled={busy}
+            disabled={!isBackendConnected || busy}
             onClick={applyTrainPreset}
           >
             Apply MPS safe preset
@@ -634,7 +687,7 @@ export function ProjectWorkspace() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={busy}
+            disabled={!isBackendConnected || busy}
             onClick={() => train(false)}
           >
             Start training (holdout)
@@ -642,10 +695,18 @@ export function ProjectWorkspace() {
           <button
             type="button"
             className="btn"
-            disabled={busy}
+            disabled={!isBackendConnected || busy}
             onClick={() => train(true)}
           >
             Start k-fold CV
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => jumpToStep("pipeline")}
+          >
+            Next: pipeline
           </button>
         </div>
 
@@ -669,8 +730,8 @@ export function ProjectWorkspace() {
         )}
       </div>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>2 · Run pipeline</h3>
+      <div id="workspace-pipeline" className="card">
+        <h3 style={{ marginTop: 0 }}>3 · Run pipeline</h3>
         <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
           Pick a trained <span className="mono">model_id</span>, choose a
           step or full workflow, then run on new abstracts (labels optional for
@@ -837,10 +898,18 @@ export function ProjectWorkspace() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={busy || !modelId}
+            disabled={!isBackendConnected || busy || !modelId}
             onClick={runPipe}
           >
             Run pipeline
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => jumpToStep("train")}
+          >
+            Back to train
           </button>
         </div>
 

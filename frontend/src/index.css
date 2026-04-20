@@ -158,12 +158,16 @@ textarea {
 }
 
 .step-pill {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
   padding: 0.35rem 0.75rem;
   border-radius: 999px;
   background: var(--surface2);
   border: 1px solid var(--border);
   font-size: 0.85rem;
   color: var(--muted);
+  cursor: pointer;
 }
 
 .step-pill.active {

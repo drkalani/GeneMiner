@@ -2,26 +2,51 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import threading
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 _lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def new_job_id() -> str:
     return str(uuid.uuid4())
 
 
-def set_job(job_id: str, state: str, message: str = "", result: Optional[Dict] = None) -> None:
+def set_job(
+    job_id: str,
+    state: str,
+    message: str = "",
+    result: Optional[Dict] = None,
+    project_id: Optional[str] = None,
+) -> None:
     with _lock:
+        current = _jobs.get(job_id, {})
         _jobs[job_id] = {
             "job_id": job_id,
+            "project_id": project_id if project_id is not None else current.get("project_id"),
             "state": state,
             "message": message,
             "result": result,
+            "created_at": current.get("created_at") or _timestamp(),
         }
+
+
+def list_jobs(project_id: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    with _lock:
+        jobs = list(_jobs.values())
+    if project_id:
+        jobs = [j for j in jobs if j.get("project_id") == project_id]
+    jobs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    if limit is not None and limit > 0:
+        jobs = jobs[:limit]
+    return jobs
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:

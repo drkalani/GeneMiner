@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.models import JobStatus, KFoldTrainJobCreate, TrainJobCreate
+from app.schemas.models import JobStatus, JobSummary, KFoldTrainJobCreate, TrainJobCreate
 from app.services import job_store
 from app.services import project_service
 from app.services.training_runner import run_kfold_train_job, run_single_train_job
@@ -17,7 +19,9 @@ def train_relevance(project_id: str, body: TrainJobCreate) -> JobStatus:
     if not project_service.get_project(project_id):
         raise HTTPException(404, "Project not found")
     job_id = job_store.new_job_id()
-    job_store.set_job(job_id, "queued", "Single train job queued")
+    job_store.set_job(
+        job_id, "queued", "Single train job queued", project_id=project_id
+    )
     run_single_train_job(job_id, project_id, body)
     return JobStatus(job_id=job_id, state="queued", message="Started in background")
 
@@ -32,9 +36,17 @@ def train_relevance_kfold(project_id: str, body: KFoldTrainJobCreate) -> JobStat
             f"Need at least {body.config.n_splits * 2} articles for stratified k-fold",
         )
     job_id = job_store.new_job_id()
-    job_store.set_job(job_id, "queued", "K-fold job queued")
+    job_store.set_job(job_id, "queued", "K-fold job queued", project_id=project_id)
     run_kfold_train_job(job_id, project_id, body)
     return JobStatus(job_id=job_id, state="queued", message="K-fold started in background")
+
+
+@router.get("/jobs", response_model=List[JobSummary])
+def list_jobs(
+    project_id: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[JobSummary]:
+    return [JobSummary(**payload) for payload in job_store.list_jobs(project_id, limit)]
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)
