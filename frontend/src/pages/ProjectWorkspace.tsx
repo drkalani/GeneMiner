@@ -353,7 +353,7 @@ export function ProjectWorkspace() {
     const sync = () => {
       const next = getApiBase();
       setBackendUrl(next);
-      void runBackendCheck(next);
+      void runBackendCheck();
     };
     sync();
     const stop = apiBaseDidChange(sync);
