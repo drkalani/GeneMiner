@@ -4,6 +4,33 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/backend"
 export PYTHONPATH="$ROOT:$ROOT/backend:${PYTHONPATH:-}"
 
+ENV_FILE="${ENV_FILE:-}"
+if [[ -z "${ENV_FILE}" ]]; then
+  if [[ -f "$ROOT/.env" ]]; then
+    ENV_FILE="$ROOT/.env"
+  elif [[ -f "$ROOT/backend/.env" ]]; then
+    ENV_FILE="$ROOT/backend/.env"
+  fi
+fi
+
+if [[ -n "${ENV_FILE}" && -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  set -a
+  source "$ENV_FILE"
+  set +a
+  echo "Loaded environment variables from $ENV_FILE."
+else
+  echo "No .env file found in ${ROOT} or ${ROOT}/backend. Using defaults and shell environment."
+fi
+
+# Default optional values to keep local startup predictable.
+: "${HF_TOKEN:=}"
+: "${HF_HOME:=${HOME}/.cache/huggingface}"
+: "${HF_HUB_CACHE:=${HF_HOME}/hub}"
+: "${HUGGINGFACE_HUB_CACHE:=${HF_HOME}/hub}"
+: "${BENT_SERVICE_URL:=}"
+: "${BENT_SERVICE_TIMEOUT_SECONDS:=30}"
+
 PY_BIN="${PY_BIN:-python3.13}"
 if ! command -v "$PY_BIN" >/dev/null 2>&1; then
   echo "Python 3.13 executable not found. Install Python 3.13.7+ and ensure 'python3.13' is on PATH."

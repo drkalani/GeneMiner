@@ -44,6 +44,31 @@ chmod +x scripts/run_backend.sh
 ./scripts/run_backend.sh
 ```
 
+### Environment file (optional)
+
+Create `.env` from the template when you want persistent defaults for local execution:
+
+```bash
+cp .env.example .env
+```
+
+Then edit values:
+
+```bash
+HF_TOKEN=your_hf_token_here
+BENT_SERVICE_URL=http://127.0.0.1:8010
+BENT_SERVICE_TIMEOUT_SECONDS=30
+HF_HOME=$HOME/.cache/huggingface
+HF_HUB_CACHE=$HOME/.cache/huggingface/hub
+HUGGINGFACE_HUB_CACHE=$HOME/.cache/huggingface/hub
+```
+
+If `.env` is missing, `./scripts/run_backend.sh` now falls back to process environment and safe defaults:
+- HF token: empty (`""`)
+- caches: `$HOME/.cache/huggingface` and derived hub paths
+- bent URL: empty (no service override)
+- bent timeout: `30`
+
 ### Bent runtime setup (optional legacy method)
 
 For local backend execution (no Docker), run:
