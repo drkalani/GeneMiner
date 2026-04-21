@@ -222,6 +222,7 @@ Importable Python package `geneminer_core` (installed with `pip install -e .`):
 ## Notes
 
 - **NER training** is not fine-tuned in this stack; the default is a pretrained `pruas/BENT-PubMedBERT-NER-Gene` model. You can swap `ner_model` in API/UI.
+- **NER methods** now support both `transformers` (default, default HF pipeline) and optional legacy `bent` extraction. In the UI, enable **Compare methods** in Pipeline to run both and inspect mention overlap.
 - **Normalization** uses live **MyGene** queries; rate-limiting sleep is applied. For high volume, add local caching (future improvement).
 - **Jobs** are stored in memory; use Redis/Queue for multi-worker production.
 

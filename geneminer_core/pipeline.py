@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from geneminer_core.ner import extract_entities, load_ner_pipeline
+from geneminer_core.ner import NerMethod, extract_entities_with_method, load_ner_pipeline
 from geneminer_core.normalization import normalize_mentions_df
 from geneminer_core.relevance import predict_relevance, relevance_model_input_mode
 from geneminer_core.schemas import ArticleRow
@@ -63,10 +63,17 @@ def run_ner_only(
     articles: List[ArticleRow],
     ner_model: str,
     processor: Optional[str],
+    ner_method: NerMethod = "transformers",
 ) -> pd.DataFrame:
-    ner = load_ner_pipeline(model_name=ner_model, processor=processor)
     pairs = [(a.pmid, a.text) for a in articles]
-    mentions = extract_entities(pairs, ner)
+    ner = None
+    if ner_method == "transformers":
+        ner = load_ner_pipeline(model_name=ner_model, processor=processor)
+    mentions = extract_entities_with_method(
+        pairs,
+        ner_pipeline=ner,
+        method=ner_method,
+    )
     if not mentions:
         return pd.DataFrame(columns=["pmid", "mention", "start", "end", "score"])
     return pd.DataFrame(
@@ -94,6 +101,7 @@ def run_full_pipeline(
     relevance_model_dir: str | Path,
     ner_model: str = "pruas/BENT-PubMedBERT-NER-Gene",
     processor: str = "auto",
+    ner_method: NerMethod = "transformers",
     relevant_label: int = 1,
     batch_size: int = 16,
     use_wikipedia_fallback: bool = True,
@@ -124,7 +132,12 @@ def run_full_pipeline(
         sub.append(
             ArticleRow(pmid=str(r.pmid), text=str(r.text), title=title)
         )
-    ner_df = run_ner_only(sub, ner_model=ner_model, processor=processor)
+    ner_df = run_ner_only(
+        sub,
+        ner_model=ner_model,
+        processor=processor,
+        ner_method=ner_method,
+    )
     if ner_df.empty:
         return df_cls, ner_df, pd.DataFrame()
 

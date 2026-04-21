@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 ProcessorType = Literal["auto", "cuda", "mps", "cpu"]
 PipelineMode = Literal["classify", "ner", "normalize", "full"]
+NerMethod = Literal["transformers", "bent"]
 
 
 class ArticleInput(BaseModel):
@@ -88,6 +89,7 @@ class PipelineRunRequest(BaseModel):
     mode: PipelineMode = "full"
     processor: ProcessorType = "auto"
     ner_model: str = "pruas/BENT-PubMedBERT-NER-Gene"
+    ner_method: NerMethod = "transformers"
     batch_size: int = 16
     use_wikipedia_fallback: bool = True
     # For normalize-only: pass prior mentions as rows

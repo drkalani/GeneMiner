@@ -12,6 +12,7 @@ import {
   type PipelineMode,
   type Processor,
   type TrainingConfig,
+  type NerMethod,
   apiBaseDidChange,
   getApiBase,
   pingBackend,
@@ -101,6 +102,9 @@ const isPipelineMode = (value: unknown): value is PipelineMode => {
     value === "normalize"
   );
 };
+const isNerMethod = (value: unknown): value is NerMethod => {
+  return value === "transformers" || value === "bent";
+};
 
 const isProcessor = (value: unknown): value is Processor => {
   return value === "auto" || value === "cuda" || value === "mps" || value === "cpu";
@@ -136,6 +140,8 @@ type PersistedWorkspaceState = {
   mode: PipelineMode;
   processor: Processor;
   nerModel: string;
+  nerMethod: NerMethod;
+  pipeCompareMethods: boolean;
   pipeBatchSize: number;
   pipeUseWikipedia: boolean;
   relevanceThreshold: number;
@@ -234,6 +240,25 @@ const getClassificationRows = (
   return [];
 };
 
+const getMentionsRows = (result: Record<string, unknown> | null): Record<string, unknown>[] => {
+  if (!result) return [];
+  if (result.kind === "full") {
+    const mentions = result.mentions;
+    if (Array.isArray(mentions)) {
+      return mentions as Record<string, unknown>[];
+    }
+    return [];
+  }
+  if (result.kind === "ner" || result.kind === "mentions") {
+    const rows = result.rows;
+    if (Array.isArray(rows)) return rows as Record<string, unknown>[];
+  }
+  if (Array.isArray(result.rows)) {
+    return result.rows as Record<string, unknown>[];
+  }
+  return [];
+};
+
 const formatImportNotice = (label: string, stats?: ImportStats | null) => {
   if (!stats) {
     return `${label}: import complete.`;
@@ -299,12 +324,17 @@ export function ProjectWorkspace() {
   const [pipeJson, setPipeJson] = useState(examplePipelineArticlesJson);
   const [processor, setProcessor] = useState<Processor>("auto");
   const [nerModel, setNerModel] = useState("pruas/BENT-PubMedBERT-NER-Gene");
+  const [nerMethod, setNerMethod] = useState<NerMethod>("transformers");
   const [pipeBatchSize, setPipeBatchSize] = useState(4);
   const [pipeUseWikipedia, setPipeUseWikipedia] = useState(true);
   const [relevanceThreshold, setRelevanceThreshold] = useState(0.5);
   const [pipeResult, setPipeResult] = useState<Record<string, unknown> | null>(
     null
   );
+  const [pipeCompareMethods, setPipeCompareMethods] = useState<boolean>(false);
+  const [pipeMethodResults, setPipeMethodResults] = useState<
+    Record<string, Record<string, unknown> | null>
+  >({});
   const [normJson, setNormJson] = useState(
     `[{"pmid":"1","mention":"TGFB1","start":0,"end":5}]`
   );
@@ -419,11 +449,13 @@ export function ProjectWorkspace() {
         setMode(isPipelineMode(parsed.mode) ? parsed.mode : "full");
         setProcessor(isProcessor(parsed.processor) ? parsed.processor : "auto");
         setNerModel(toStoredString(parsed.nerModel, "pruas/BENT-PubMedBERT-NER-Gene"));
+        setNerMethod(isNerMethod(parsed.nerMethod) ? parsed.nerMethod : "transformers");
         setPipeBatchSize(Math.max(1, Math.round(toStoredNumber(parsed.pipeBatchSize, 4))));
         setPipeUseWikipedia(toStoredBoolean(parsed.pipeUseWikipedia, true));
         setRelevanceThreshold(
           toStoredNumberFromString(parsed.relevanceThreshold, 0.5)
         );
+        setPipeCompareMethods(toStoredBoolean(parsed.pipeCompareMethods, false));
         setBaseModelToDownload(toStoredString(parsed.baseModelToDownload, ""));
         setCompareThreshold(toStoredNumberFromString(parsed.compareThreshold, 0.5));
         setPubmedMax(Math.max(1, Math.round(toStoredNumber(parsed.pubmedMax, 50))));
@@ -457,8 +489,10 @@ export function ProjectWorkspace() {
     setMode("full");
     setProcessor("auto");
     setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
+    setNerMethod("transformers");
     setPipeBatchSize(4);
     setPipeUseWikipedia(true);
+    setPipeCompareMethods(false);
     setRelevanceThreshold(0.5);
     setBaseModelToDownload("");
     setCompareThreshold(0.5);
@@ -488,6 +522,8 @@ export function ProjectWorkspace() {
         mode,
         processor,
         nerModel,
+        nerMethod,
+        pipeCompareMethods,
         pipeBatchSize,
         pipeUseWikipedia,
         relevanceThreshold,
@@ -648,7 +684,10 @@ export function ProjectWorkspace() {
     return true;
   };
 
-  const validateNerModelForPipeline = async (): Promise<boolean> => {
+  const validateNerModelForPipeline = async (method: NerMethod): Promise<boolean> => {
+    if (method !== "transformers") {
+      return true;
+    }
     const check = await checkNerModelCompatibility(nerModel, true);
     if (!check) {
       setErr("NER model check failed.");
@@ -1014,49 +1053,89 @@ export function ProjectWorkspace() {
     setBusy(true);
     setBusyMessage("Running pipeline jobs...");
     setPipeResult(null);
+    setPipeMethodResults({});
     try {
+      const compareEnabled = (mode === "ner" || mode === "full") && pipeCompareMethods;
+      const methodsToRun: NerMethod[] = compareEnabled
+        ? Array.from(new Set([nerMethod, "transformers", "bent"]))
+        : [nerMethod];
+
       if (mode === "ner" || mode === "full") {
-        setBusyMessage("Validating NER model...");
-        if (!(await validateNerModelForPipeline())) {
-          return;
+        setBusyMessage("Validating NER method compatibility...");
+        for (const method of methodsToRun) {
+          if (!(await validateNerModelForPipeline(method))) {
+            return;
+          }
         }
       }
+
       setBusyMessage("Running pipeline jobs...");
-      const articles = JSON.parse(pipeJson) as Article[];
-      const payload: Parameters<typeof api.runPipeline>[0] = {
-        project_id: projectId,
-        model_id: modelId,
-        articles: articles.map((a) => {
-          const base = {
-            pmid: String(a.pmid),
-            text: String(a.text),
-            label:
-              a.label === undefined || a.label === null
-                ? undefined
-                : Number(a.label),
-          };
-          const titleStr =
-            a.title !== undefined &&
-            a.title !== null &&
-            String(a.title).trim() !== ""
-              ? String(a.title).trim()
-              : undefined;
-          return titleStr !== undefined ? { ...base, title: titleStr } : base;
-        }),
-        mode,
-        processor,
-        ner_model: nerModel,
-      batch_size: pipeBatchSize,
-      use_wikipedia_fallback: pipeUseWikipedia,
+      const parsedArticles = JSON.parse(pipeJson) as Article[];
+      const baseArticles = parsedArticles.map((a) => {
+        const base = {
+          pmid: String(a.pmid),
+          text: String(a.text),
+          label: a.label === undefined || a.label === null ? undefined : Number(a.label),
+        };
+        const titleStr =
+          a.title !== undefined &&
+          a.title !== null &&
+          String(a.title).trim() !== ""
+            ? String(a.title).trim()
+            : undefined;
+        return titleStr !== undefined ? { ...base, title: titleStr } : base;
+      });
+
+      const runSinglePipeline = async (method: NerMethod) => {
+        const payload: Parameters<typeof api.runPipeline>[0] = {
+          project_id: projectId,
+          model_id: modelId,
+          articles: baseArticles,
+          mode,
+          processor,
+          ner_model: nerModel,
+          ner_method: method,
+          batch_size: pipeBatchSize,
+          use_wikipedia_fallback: pipeUseWikipedia,
+        };
+        if (mode === "normalize") {
+          payload.mentions_json = JSON.parse(normJson) as Record<string, unknown>[];
+        }
+        return api.runPipeline(payload);
       };
-      if (mode === "normalize") {
-        payload.mentions_json = JSON.parse(normJson) as Record<
-          string,
-          unknown
-        >[];
+
+      const resultsByMethod: Record<string, Record<string, unknown> | null> = {};
+      const failures: string[] = [];
+      for (const method of methodsToRun) {
+        const methodName = method === "transformers" ? "HF transformers" : "BENT";
+        setBusyMessage(`Running pipeline jobs (${methodName})...`);
+        try {
+          const out = await runSinglePipeline(method);
+          resultsByMethod[method] = out;
+        } catch (err) {
+          failures.push(`${methodName}: ${(err as Error).message}`);
+          resultsByMethod[method] = null;
+        }
       }
-      const out = await api.runPipeline(payload);
-      setPipeResult(out);
+
+      const completed = Object.values(resultsByMethod).some((value) => value !== null);
+      if (!completed) {
+        throw new Error(failures.length ? failures.join(" | ") : "No pipeline run produced a result.");
+      }
+
+      setPipeMethodResults(resultsByMethod);
+      const firstResult = resultsByMethod[methodsToRun[0]] || null;
+      if (firstResult) {
+        setPipeResult(firstResult);
+      } else {
+        const fallback = Object.values(resultsByMethod).find((value) => value !== null);
+        if (fallback) {
+          setPipeResult(fallback);
+        }
+      }
+      if (failures.length) {
+        setErr(`Some methods failed: ${failures.join(" | ")}`);
+      }
       refreshLastRun();
     } catch (e) {
       setErr((e as Error).message);
@@ -1291,9 +1370,11 @@ export function ProjectWorkspace() {
   const applyPipelinePreset = () => {
     setProcessor("mps");
     setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
+    setNerMethod("transformers");
     setPipeBatchSize(4);
     setPipeUseWikipedia(true);
     setMode("full");
+    setPipeCompareMethods(false);
     setRelevanceThreshold(0.5);
   };
 
@@ -1305,6 +1386,10 @@ export function ProjectWorkspace() {
   };
 
   const classificationRows = pipeResult ? getClassificationRows(pipeResult) : [];
+  const methodComparisonRows = Object.entries(pipeMethodResults).map(([method, result]) => ({
+    method,
+    rows: getMentionsRows(result),
+  }));
   const filteredClassificationRows = classificationRows.filter((row) => {
     const prob = toNumberOrNull(row.relevance_prob);
     if (prob === null) return false;
@@ -2178,7 +2263,13 @@ export function ProjectWorkspace() {
             <label>Mode</label>
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as PipelineMode)}
+              onChange={(e) => {
+                const nextMode = e.target.value as PipelineMode;
+                setMode(nextMode);
+                if (nextMode === "normalize" || nextMode === "classify") {
+                  setPipeCompareMethods(false);
+                }
+              }}
             >
               <option value="full">full (classify → NER → normalize)</option>
               <option value="classify">classify only</option>
@@ -2215,16 +2306,57 @@ export function ProjectWorkspace() {
           </div>
           <div>
             <label>NER model (Hugging Face id)</label>
+            <select
+              value={nerMethod}
+              onChange={(e) => {
+                const next = e.target.value as NerMethod;
+                setNerMethod(next);
+                if (next === "transformers") {
+                  void checkNerModelCompatibility(nerModel, true);
+                } else {
+                  setNerModelCheck((prev) => ({
+                    ...prev,
+                    compatible: null,
+                    detectedTasks: [],
+                    message: "Bent mode ignores HF model id; optional dependency required.",
+                  }));
+                }
+              }}
+              style={{ marginBottom: "0.5rem" }}
+            >
+              <option value="transformers">HF token-classification</option>
+              <option value="bent">Bent (.ann parser)</option>
+            </select>
             <input
               value={nerModel}
               onChange={(e) => {
                 const value = e.target.value;
                 setNerModel(value);
-                void checkNerModelCompatibility(value, true);
+                if (nerMethod === "transformers") {
+                  void checkNerModelCompatibility(value, true);
+                }
               }}
+              disabled={nerMethod === "bent"}
+              style={{ width: "100%" }}
             />
-            <div>{renderModelCheckTag("NER model", nerModelCheck)}</div>
+            <div style={{ marginTop: "0.35rem" }}>{renderModelCheckTag("NER model", nerModelCheck)}</div>
             {renderModelCheckMessage(nerModelCheck)}
+            {nerMethod === "bent" && (
+              <p style={{ color: "var(--muted)", fontSize: "0.78rem", marginTop: "0.4rem" }}>
+                Bent mode uses an optional dependency (`bent`) and ignores the model id.
+              </p>
+            )}
+          </div>
+          <div>
+            <label>Compare methods</label>
+            <select
+              value={pipeCompareMethods ? "on" : "off"}
+              onChange={(e) => setPipeCompareMethods(e.target.value === "on")}
+              disabled={mode === "normalize" || mode === "classify"}
+            >
+              <option value="off">off</option>
+              <option value="on">on (run both HF + Bent)</option>
+            </select>
           </div>
           <div>
             <label>Batch size</label>
@@ -2517,6 +2649,28 @@ export function ProjectWorkspace() {
 
         {pipeResult && (
           <div style={{ marginTop: "1rem" }}>
+            {methodComparisonRows.length > 1 && (
+              <div style={{ marginBottom: "1rem" }}>
+                <h4>Method comparison (mentions)</h4>
+                <div style={{ display: "grid", gap: "0.7rem" }}>
+                  {methodComparisonRows.map((item) => (
+                    <div key={item.method} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "0.6rem" }}>
+                      <div className="tag" style={{ marginBottom: "0.4rem" }}>
+                        {item.method === "transformers" ? "HF transformers" : "Bent (.ann)"} -{" "}
+                        {item.rows.length} mentions
+                      </div>
+                      <pre
+                        className="mono"
+                        style={{ maxHeight: "160px", overflow: "auto", margin: 0, padding: "0.5rem", fontSize: "0.76rem" }}
+                      >
+                        {JSON.stringify(item.rows.slice(0, 30), null, 2)}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <h4>Charts</h4>
             <ChartFromPayload pipeResult={pipeResult} />
             {filteredClassificationRows.length > 0 && (

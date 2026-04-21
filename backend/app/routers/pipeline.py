@@ -24,9 +24,10 @@ def run_pipeline(body: PipelineRunRequest) -> dict:
             raise HTTPException(400, result["message"])
 
     if body.mode in {"ner", "full"}:
-        ner_result = validate_model_task(body.ner_model, "token_classification")
-        if not ner_result["compatible"]:
-            raise HTTPException(400, ner_result["message"])
+        if body.ner_method == "transformers":
+            ner_result = validate_model_task(body.ner_model, "token_classification")
+            if not ner_result["compatible"]:
+                raise HTTPException(400, ner_result["message"])
 
     try:
         return execute_pipeline(body)

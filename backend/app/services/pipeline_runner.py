@@ -59,6 +59,7 @@ def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:
             rows,
             ner_model=req.ner_model,
             processor=req.processor,
+            ner_method=req.ner_method,
         )
         df.to_csv(out_dir / "mentions.csv", index=False)
         payload = _df_payload(df, "ner")
@@ -81,6 +82,7 @@ def execute_pipeline(req: PipelineRunRequest) -> Dict[str, Any]:
             model_path,
             ner_model=req.ner_model,
             processor=req.processor,
+            ner_method=req.ner_method,
             batch_size=req.batch_size,
             use_wikipedia_fallback=req.use_wikipedia_fallback,
         )

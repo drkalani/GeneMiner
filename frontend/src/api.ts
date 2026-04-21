@@ -109,6 +109,7 @@ async function triggerDownload(path: string, fallbackName: string): Promise<void
 
 export type Processor = "auto" | "cuda" | "mps" | "cpu";
 export type PipelineMode = "classify" | "ner" | "normalize" | "full";
+export type NerMethod = "transformers" | "bent";
 
 export interface Project {
   id: string;
@@ -355,6 +356,7 @@ export const api = {
     mode: PipelineMode;
     processor: Processor;
     ner_model: string;
+    ner_method: NerMethod;
     batch_size: number;
     use_wikipedia_fallback: boolean;
     mentions_json?: Record<string, unknown>[];
