@@ -2351,7 +2351,7 @@ export function ProjectWorkspace() {
             {nerMethod === "bent" && (
               <p style={{ color: "var(--muted)", fontSize: "0.78rem", marginTop: "0.4rem" }}>
                 Bent mode uses an optional dependency (`bent`) and ignores the model id.
-                Install with {`pip install bent==0.0.80`} (Python 3.10.x, <=3.10.13) and enable via:
+                Install with {`pip install bent==0.0.80`} (Python 3.10.x, &lt;=3.10.13) and enable via:
                 <br />
                 - `./scripts/setup_bent_runtime.sh` + run backend from that venv, or
                 <br />
