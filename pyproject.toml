@@ -7,7 +7,7 @@ name = "geneminer-platform"
 version = "1.0.0"
 description = "GeneMiner: literature mining with FastAPI + React"
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.13.7,<3.14"
 dependencies = [
   "torch>=2.0",
   "transformers>=4.36",

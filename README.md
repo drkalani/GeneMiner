@@ -14,7 +14,7 @@ Pipeline runs write CSV snapshots under `data/projects/<id>/outputs/last_run/` (
 
 ## Requirements
 
-- Python **3.10.x** (project is aligned to Bent-supported runtime)
+- Python **3.13.7+** (backend runtime; Bent remains isolated on Python 3.10.x)
 - Node.js **18+** (for the frontend)
 - PyTorch with the backend you need ([pytorch.org](https://pytorch.org))
 
@@ -22,7 +22,7 @@ Pipeline runs write CSV snapshots under `data/projects/<id>/outputs/last_run/` (
 
 ```bash
 cd /path/to/GeneMiner-DKD
-python3.10 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[api]"
 ```

@@ -4,21 +4,29 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/backend"
 export PYTHONPATH="$ROOT:$ROOT/backend:${PYTHONPATH:-}"
 
-PY_BIN="python3.10"
+PY_BIN="${PY_BIN:-python3.13}"
 if ! command -v "$PY_BIN" >/dev/null 2>&1; then
-  echo "Python 3.10 executable not found. Install Python 3.10 and ensure 'python3.10' is on PATH."
+  echo "Python 3.13 executable not found. Install Python 3.13.7+ and ensure 'python3.13' is on PATH."
   exit 1
 fi
 
-PY_MINOR_VERSION="$(
+PY_VERSION="$(
 ${PY_BIN} - <<'PY'
 import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
+print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
 PY
 )"
-if [[ "$PY_MINOR_VERSION" != "3.10" ]]; then
-  echo "Project runtime is pinned to Python 3.10.x for Bent compatibility."
-  echo "Current interpreter: $PY_MINOR_VERSION"
+
+read -r PY_MAJOR PY_MINOR PY_PATCH <<<"${PY_VERSION//./ }"
+if [[ "$PY_MAJOR" != "3" || "$PY_MINOR" != "13" ]]; then
+  echo "Backend runtime is now using Python 3.13.7+ (Bent remains a separate service)."
+  echo "Current interpreter: ${PY_VERSION}"
+  exit 1
+fi
+
+if (( PY_PATCH < 7 )); then
+  echo "Backend runtime needs Python 3.13.7+."
+  echo "Current interpreter: ${PY_VERSION}"
   exit 1
 fi
 
