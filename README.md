@@ -50,16 +50,45 @@ For local backend execution (no Docker), run:
 
 ```bash
 chmod +x scripts/setup_bent_runtime.sh
+./scripts/setup_bent_runtime.sh
+```
+
+By default this creates or reuses a dedicated Python 3.10.x virtual environment at `./.venv-bent` so your main project virtualenv is unchanged.
+
+```bash
 PY_BIN=python3.10 ./scripts/setup_bent_runtime.sh
+BENT_VENV="$PWD/.venv-bent" ./scripts/setup_bent_runtime.sh
+RUN_SETUP=1 ./scripts/setup_bent_runtime.sh
 ```
 
 This script:
 - verifies Python 3.10.x compatibility (`<=3.10.13`)
-- installs `bent==0.0.80` (latest release compatible with Python 3.10.13) into the selected interpreter
+- installs `bent==0.0.80` (latest release compatible with Python 3.10.13) into a dedicated Bent virtualenv
 - writes `frontend/.env.local` with `VITE_API_BASE=http://127.0.0.1:8000`
 
+To run a Bent-only step manually:
+
+```bash
+source .venv-bent/bin/activate
+bent_setup
+deactivate
+```
+
+To expose Bent as a microservice from that venv:
+
+```bash
+chmod +x scripts/run_bent_service.sh
+./scripts/run_bent_service.sh
+```
+
+Then set backend env before launch:
+
+```bash
+export BENT_SERVICE_URL=http://127.0.0.1:8010
+```
+
 For Docker compose deployments, a dedicated optional Bent runtime service is defined in
-`docker-compose.yml` as `bent-runtime` using `pedroruas18/bent`.
+`docker-compose.yml` as `bent-runtime` and serves `POST /annotate` on port `8010`.
 Run it before enabling Bent jobs:
 
 ```bash
@@ -71,6 +100,18 @@ Optional helper:
 - set `RUN_SETUP=0` to skip running `bent_setup` inside the container
 - set `WRITE_ENV=0` to avoid overwriting `frontend/.env.local`
 - set `COMPOSE_FILE=...` to use a specific compose file
+
+When using the container profile, set:
+
+```bash
+export BENT_SERVICE_URL=http://bent-runtime:8010
+```
+
+Optional tuning:
+
+```bash
+export BENT_SERVICE_TIMEOUT_SECONDS=60
+```
 
 To include `bent-runtime` during a single compose bootstrap:
 
@@ -259,8 +300,11 @@ Importable Python package `geneminer_core` (installed with `pip install -e .`):
 - **NER training** is not fine-tuned in this stack; the default is a pretrained `pruas/BENT-PubMedBERT-NER-Gene` model. You can swap `ner_model` in API/UI.
 - **NER methods** now support both `transformers` (default, default HF pipeline) and optional legacy `bent` extraction. In the UI, enable **Compare methods** in Pipeline to run both and inspect mention overlap.
 - **Bent method** is optional and uses the legacy release `bent==0.0.80` (latest release compatible with Python 3.10.13).
-  - use `./scripts/setup_bent_runtime.sh` for local Python install
-  - in compose, run `./scripts/setup_docker_bent.sh` before enabling Bent jobs
+  - use `./scripts/setup_bent_runtime.sh` for local Python install (separate `.venv-bent` runtime)
+  - for runtime integration set `BENT_SERVICE_URL` and point it to your bent service:
+    - local service: `http://127.0.0.1:8010`
+    - compose service: `http://bent-runtime:8010`
+    - helper: `./scripts/run_bent_service.sh` or `./scripts/setup_docker_bent.sh`
 - **Normalization** uses live **MyGene** queries; rate-limiting sleep is applied. For high volume, add local caching (future improvement).
 - **Jobs** are stored in memory; use Redis/Queue for multi-worker production.
 

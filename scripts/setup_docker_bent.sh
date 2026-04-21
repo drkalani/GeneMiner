@@ -38,6 +38,7 @@ fi
 
 echo "Starting bent-runtime service with compose profile 'bent'..."
 docker compose --file "$COMPOSE_FILE" --profile bent up -d bent-runtime
+echo "Bent service URL (container network): http://bent-runtime:8010"
 
 if [[ "${RUN_SETUP}" == "1" ]]; then
   echo "Running bent_setup in bent-runtime container..."

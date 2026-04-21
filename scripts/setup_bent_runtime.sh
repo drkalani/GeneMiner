@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY_BIN="${PY_BIN:-python3.10}"
 BENT_VERSION="0.0.80"
+BENT_VENV="${BENT_VENV:-$ROOT/.venv-bent}"
 FRONTEND_ENV_FILE="$ROOT/frontend/.env.local"
 
 usage() {
@@ -12,11 +13,13 @@ Usage:
   scripts/setup_bent_runtime.sh
 
 Optional env vars:
-  PY_BIN     Python executable for local mode (default: python3.10)
+  PY_BIN     Python executable for creating the runtime environment (default: python3.10)
+  BENT_VENV  Virtualenv path for Bent runtime (default: <repo>/.venv-bent)
   RUN_SETUP  Set to 1 to run bent_setup during installation (default: 0)
 
 Examples:
   PY_BIN=python3.10 ./scripts/setup_bent_runtime.sh
+  BENT_VENV="$PWD/.venv-bent" ./scripts/setup_bent_runtime.sh
   RUN_SETUP=1 ./scripts/setup_bent_runtime.sh
 EOF
 }
@@ -54,6 +57,75 @@ check_python310_mode() {
   fi
 }
 
+check_venv_python_mode() {
+  local venv_python="$1"
+  local version
+  version="$("$venv_python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')"
+  if [[ "$version" != 3.10.* ]]; then
+    echo "Bent runtime virtualenv is not Python 3.10.x (this interpreter is $version)."
+    echo "Delete ${BENT_VENV} and rerun this script to recreate it with Python 3.10."
+    exit 1
+  fi
+
+  local patch
+  patch="$(echo "$version" | awk -F. '{print $3}')"
+  if [[ -z "$patch" ]] || (( patch > 13 )); then
+    echo "Bent requires Python <=3.10.13, but this environment is $version."
+    echo "Delete ${BENT_VENV} and rerun this script to recreate it with Python <=3.10.13."
+    exit 1
+  fi
+}
+
+ensure_bent_env() {
+  local venv_python="$BENT_VENV/bin/python"
+
+  if [[ -d "$BENT_VENV" ]]; then
+    if [[ ! -x "$venv_python" ]]; then
+      echo "Existing BENT_VENV path '${BENT_VENV}' is invalid (missing virtualenv Python binary)."
+      echo "Delete it or set BENT_VENV to a different path."
+      exit 1
+    fi
+    echo "Reusing existing Bent runtime virtualenv at ${BENT_VENV}."
+  else
+    echo "Creating dedicated virtualenv for Bent at ${BENT_VENV}..."
+    "$PY_BIN" -m venv "$BENT_VENV"
+  fi
+
+  check_venv_python_mode "$venv_python"
+
+  local venv_python_basename
+  venv_python_basename="$(basename "$venv_python")"
+  if [[ ! -x "$BENT_VENV/bin/$venv_python_basename" ]]; then
+    echo "Bent runtime virtualenv setup is incomplete."
+    exit 1
+  fi
+}
+
+install_bent_in_env() {
+  local venv_python="$BENT_VENV/bin/python"
+  local venv_pip="$BENT_VENV/bin/pip"
+  local bent_setup="$BENT_VENV/bin/bent_setup"
+
+  "$venv_python" -m pip install --upgrade pip
+  "$venv_pip" install "bent==${BENT_VERSION}"
+
+  if [[ "${RUN_SETUP:-0}" == "1" ]]; then
+    if [[ -x "$bent_setup" ]]; then
+      echo "Running bent_setup in ${BENT_VENV}..."
+      "$bent_setup"
+    else
+      echo "bent was installed, but bent_setup is not available in ${BENT_VENV}."
+      echo "If needed, run:"
+      echo "  ${bent_setup}"
+    fi
+  else
+    echo "To prepare Bent knowledge bases, run:"
+    echo "  ${bent_setup}"
+  fi
+
+  echo "Bent runtime environment ready at: ${BENT_VENV}"
+}
+
 install_local_bent() {
   if ! command -v "$PY_BIN" >/dev/null 2>&1; then
     echo "Python executable '$PY_BIN' not found."
@@ -63,25 +135,13 @@ install_local_bent() {
 
   check_python310_mode
 
-  echo "Installing bent ${BENT_VERSION} into $(command -v "$PY_BIN")..."
-  "$PY_BIN" -m pip install --upgrade pip
-  "$PY_BIN" -m pip install "bent==${BENT_VERSION}"
-
-  if [[ "${RUN_SETUP:-0}" == "1" ]]; then
-    if command -v bent_setup >/dev/null 2>&1; then
-      echo "Running bent_setup to download built-in knowledge bases..."
-      TF_CPP_MIN_LOG_LEVEL=3 bent_setup
-    else
-      echo "bent was installed, but bent_setup is not on PATH."
-      echo "Run 'bent_setup' from the same environment to complete optional Bent KB setup."
-    fi
-  else
-    echo "To prepare Bent knowledge bases, run:"
-    echo "  bent_setup"
-  fi
+  ensure_bent_env
+  install_bent_in_env
 
   set_frontend_mode "http://127.0.0.1:8000"
   echo "Frontend env written to ${FRONTEND_ENV_FILE} (mode=local)."
+  echo "To use Bent, run commands inside ${BENT_VENV}:"
+  echo "  source \"${BENT_VENV}/bin/activate\""
 }
 
 install_local_bent

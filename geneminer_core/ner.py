@@ -7,25 +7,31 @@ Current supported backends:
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
+import os
 from pathlib import Path
 from importlib import import_module
 from typing import Any, Callable, List, Optional, Tuple
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from typing import Literal
 
-from geneminer_core.devices import device_for_pipeline, pipeline_device_index
 from geneminer_core.schemas import MentionRecord
 
 DEFAULT_NER_MODEL = "pruas/BENT-PubMedBERT-NER-Gene"
 NerMethod = Literal["transformers", "bent"]
+BENT_SERVICE_DEFAULT_TIMEOUT = 30
 
 
 def load_ner_pipeline(
     model_name: str = DEFAULT_NER_MODEL,
     processor: Optional[str] = None,
 ):
+    from geneminer_core.devices import device_for_pipeline, pipeline_device_index
+
     transformers_pipeline = import_module("transformers").pipeline
     device = device_for_pipeline(processor)
     dev_idx = pipeline_device_index(device)
@@ -167,7 +173,16 @@ def _invoke_bent_annotate(annotate_fn: Callable[..., Any], texts: List[str], out
         ) from last_error or exc
 
 
-def extract_entities_with_bent(pairs: List[Tuple[str, str]]) -> List[MentionRecord]:
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def extract_entities_with_bent_partitioned(
+    pairs: List[Tuple[str, str]]
+) -> List[tuple[str, List[MentionRecord]]]:
     non_empty = [(pmid, text) for pmid, text in pairs if text and str(text).strip()]
     if not non_empty:
         return []
@@ -186,8 +201,6 @@ def extract_entities_with_bent(pairs: List[Tuple[str, str]]) -> List[MentionReco
         raise RuntimeError("Bent package does not expose annotate() entry point.")
 
     texts = [text for _, text in non_empty]
-    records: List[MentionRecord] = []
-
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp) / "output" / "ner"
 
@@ -199,18 +212,147 @@ def extract_entities_with_bent(pairs: List[Tuple[str, str]]) -> List[MentionReco
         ann_files = _collect_ann_files(out_dir, len(non_empty))
         if not ann_files:
             raise RuntimeError(f"Bent annotation produced no .ann files in {out_dir}.")
+        chunks: List[tuple[str, List[MentionRecord]]] = []
         for ann_file, (pmid, _) in zip(ann_files, non_empty):
             lines = ann_file.read_text(encoding="utf-8", errors="ignore").splitlines()
-            records.extend(_parse_bent_ann_lines(lines, pmid))
+            chunks.append((str(pmid), _parse_bent_ann_lines(lines, pmid)))
 
+    return chunks
+
+
+def extract_entities_with_bent_local(pairs: List[Tuple[str, str]]) -> List[MentionRecord]:
+    records: List[MentionRecord] = []
+    for _, mentions in extract_entities_with_bent_partitioned(pairs):
+        records.extend(mentions)
     return records
+
+
+def _extract_entities_with_bent_service(
+    pairs: List[Tuple[str, str]], service_url: str
+) -> List[MentionRecord]:
+    timeout_raw = os.getenv("BENT_SERVICE_TIMEOUT_SECONDS", str(BENT_SERVICE_DEFAULT_TIMEOUT))
+    try:
+        timeout = float(timeout_raw)
+    except ValueError:
+        timeout = float(BENT_SERVICE_DEFAULT_TIMEOUT)
+    request_url = service_url.rstrip("/")
+    if not request_url.endswith("/annotate"):
+        request_url = request_url + "/annotate"
+    payload_pairs = [
+        {"pmid": str(pmid), "text": str(text), "text_index": idx}
+        for idx, (pmid, text) in enumerate(pairs)
+        if text and str(text).strip()
+    ]
+    payload = {
+        "pairs": [
+            {"pmid": pair["pmid"], "text": pair["text"], "text_index": pair["text_index"]}
+            for pair in payload_pairs
+        ]
+    }
+
+    request = Request(
+        request_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+            if response.status >= 400:
+                raise RuntimeError(f"Bent service returned status {response.status}: {body}")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Bent service request failed: HTTP {exc.code}: {body}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Bent service request failed: {exc}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Bent service request failed: {exc}") from exc
+
+    try:
+        result = json.loads(body or "{}")
+    except ValueError as exc:
+        raise RuntimeError(f"Bent service response was not valid JSON: {body}") from exc
+
+    results = result.get("results")
+    if not isinstance(results, list):
+        raise RuntimeError("Bent service response missing `results` list.")
+
+    index_map: dict[int, List[MentionRecord]] = {}
+    fallback_results: List[List[MentionRecord]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        mentions = item.get("mentions")
+        if not isinstance(mentions, list):
+            continue
+        mentions_list: List[MentionRecord] = []
+        for mention in mentions:
+            if not isinstance(mention, dict):
+                continue
+            mention_text = str(mention.get("mention", "")).strip()
+            start = _safe_int(mention.get("start"), 0)
+            end = _safe_int(mention.get("end"), 0)
+            score_raw = mention.get("score")
+            score = float(score_raw) if score_raw is not None else None
+            mention_pmid = str(item.get("pmid", ""))
+            mentions_list.append(
+                MentionRecord(
+                    pmid=mention_pmid,
+                    mention=mention_text,
+                    start=start,
+                    end=end,
+                    score=score,
+                )
+            )
+        if "text_index" in item:
+            index = _safe_int(item.get("text_index"), len(index_map))
+            index_map[index] = mentions_list
+        else:
+            fallback_results.append(mentions_list)
+
+    ordered_results: List[List[MentionRecord]] = []
+    for idx, pair in enumerate(payload_pairs):
+        pair_index = _safe_int(pair["text_index"], idx)
+        mentions = index_map.get(pair_index)
+        if mentions is None and fallback_results:
+            mentions = fallback_results.pop(0)
+        else:
+            mentions = mentions or []
+        if mentions:
+            has_pmid = any(m.pmid for m in mentions)
+            if not has_pmid:
+                for m in mentions:
+                    m.pmid = pair["pmid"]
+        ordered_results.append(mentions)
+
+    rows: List[MentionRecord] = []
+    for mentions in ordered_results:
+        rows.extend(mentions)
+    return rows
+
+
+def extract_entities_with_bent(
+    pairs: List[Tuple[str, str]],
+    bent_service_url: Optional[str] = None,
+) -> List[MentionRecord]:
+    non_empty = [(pmid, text) for pmid, text in pairs if text and str(text).strip()]
+    if not non_empty:
+        return []
+
+    service_url = bent_service_url or os.getenv("BENT_SERVICE_URL", "").strip()
+    if service_url:
+        return _extract_entities_with_bent_service(non_empty, service_url)
+    return extract_entities_with_bent_local(non_empty)
 
 
 def extract_entities_with_method(
     pairs: List[Tuple[str, str]],
     ner_pipeline=None,
     method: NerMethod = "transformers",
+    bent_service_url: Optional[str] = None,
 ) -> List[MentionRecord]:
     if method == "bent":
-        return extract_entities_with_bent(pairs)
+        return extract_entities_with_bent(pairs, bent_service_url=bent_service_url)
     return extract_entities(pairs, ner_pipeline=ner_pipeline)

@@ -64,6 +64,7 @@ def run_ner_only(
     ner_model: str,
     processor: Optional[str],
     ner_method: NerMethod = "transformers",
+    bent_service_url: str | None = None,
 ) -> pd.DataFrame:
     pairs = [(a.pmid, a.text) for a in articles]
     ner = None
@@ -73,6 +74,7 @@ def run_ner_only(
         pairs,
         ner_pipeline=ner,
         method=ner_method,
+        bent_service_url=bent_service_url,
     )
     if not mentions:
         return pd.DataFrame(columns=["pmid", "mention", "start", "end", "score"])
@@ -102,6 +104,7 @@ def run_full_pipeline(
     ner_model: str = "pruas/BENT-PubMedBERT-NER-Gene",
     processor: str = "auto",
     ner_method: NerMethod = "transformers",
+    bent_service_url: str | None = None,
     relevant_label: int = 1,
     batch_size: int = 16,
     use_wikipedia_fallback: bool = True,
@@ -137,6 +140,7 @@ def run_full_pipeline(
         ner_model=ner_model,
         processor=processor,
         ner_method=ner_method,
+        bent_service_url=bent_service_url,
     )
     if ner_df.empty:
         return df_cls, ner_df, pd.DataFrame()

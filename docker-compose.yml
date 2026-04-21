@@ -10,6 +10,7 @@ services:
       - HF_HOME=/app/.cache/huggingface
       - HF_HUB_CACHE=/app/.cache/huggingface/hub
       - HUGGINGFACE_HUB_CACHE=/app/.cache/huggingface/hub
+      - BENT_SERVICE_URL=${BENT_SERVICE_URL:-}
     volumes:
       - ./data:/app/data
       - ${HOME}/.cache/huggingface:/app/.cache/huggingface
@@ -25,15 +26,24 @@ services:
   bent-runtime:
     profiles:
       - bent
-    image: pedroruas18/bent
+    build:
+      context: .
+      dockerfile: bent_service/Dockerfile
     container_name: geneminer-bent-runtime
     environment:
       - TF_CPP_MIN_LOG_LEVEL=3
     volumes:
       - bent-cache:/root/.cache/bent
-    # Keep this service off by default; enable it via `--profile bent`
-    # and run `docker compose exec bent-runtime bent_setup` before enabling Bent jobs.
-    command: ["tail", "-f", "/dev/null"]
+    # Keep this service off by default; enable it via `--profile bent`.
+    # Set BENT_SERVICE_URL=http://bent-runtime:8010 when enabling bent method in backend.
+    ports:
+      - "8010:8010"
+    command: ["python", "-m", "bent_service.main", "--host", "0.0.0.0", "--port", "8010"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
   frontend:
     build:

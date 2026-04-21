@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "GeneMiner API"
+    bent_service_url: str = ""
     data_dir: Path = Path(__file__).resolve().parent.parent.parent / "data"
     cors_origins: list[str] = [
         "http://localhost:5173",
