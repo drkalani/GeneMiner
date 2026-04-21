@@ -1,10 +1,14 @@
 .venv/
+.venv*/
+.DS_Store
+*.DS_Store
 __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
 build/
 .env
+.env.local
 data/
 node_modules/
 frontend/dist/

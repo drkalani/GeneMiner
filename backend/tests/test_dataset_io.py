@@ -60,7 +60,7 @@ class TestReadArticles(unittest.TestCase):
             "pmid,title,abstract,label\n"
             "1,Title only one,,1\n"
             "2,,Abstract present,0\n"
-            "3,No title and no text,,1\n"
+            "3,,,1\n"
         )
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".csv", delete=False, encoding="utf-8"

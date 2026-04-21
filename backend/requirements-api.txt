@@ -7,5 +7,3 @@ python-multipart>=0.0.6
 pydantic-settings>=2.1
 openpyxl>=3.1
 biopython>=1.83
-# Optional: enable bent-method extraction in /pipeline/run when selected in UI.
-# bent>=0.6

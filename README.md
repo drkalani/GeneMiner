@@ -14,7 +14,7 @@ Pipeline runs write CSV snapshots under `data/projects/<id>/outputs/last_run/` (
 
 ## Requirements
 
-- Python **3.10+**
+- Python **3.10.x** (project is aligned to Bent-supported runtime)
 - Node.js **18+** (for the frontend)
 - PyTorch with the backend you need ([pytorch.org](https://pytorch.org))
 
@@ -22,7 +22,7 @@ Pipeline runs write CSV snapshots under `data/projects/<id>/outputs/last_run/` (
 
 ```bash
 cd /path/to/GeneMiner-DKD
-python -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[api]"
 ```
@@ -44,6 +44,40 @@ chmod +x scripts/run_backend.sh
 ./scripts/run_backend.sh
 ```
 
+### Bent runtime setup (optional legacy method)
+
+For local backend execution (no Docker), run:
+
+```bash
+chmod +x scripts/setup_bent_runtime.sh
+PY_BIN=python3.10 ./scripts/setup_bent_runtime.sh
+```
+
+This script:
+- verifies Python 3.10.x compatibility (`<=3.10.13`)
+- installs `bent==0.0.80` (latest release compatible with Python 3.10.13) into the selected interpreter
+- writes `frontend/.env.local` with `VITE_API_BASE=http://127.0.0.1:8000`
+
+For Docker compose deployments, a dedicated optional Bent runtime service is defined in
+`docker-compose.yml` as `bent-runtime` using `pedroruas18/bent`.
+Run it before enabling Bent jobs:
+
+```bash
+chmod +x scripts/setup_docker_bent.sh
+./scripts/setup_docker_bent.sh
+```
+
+Optional helper:
+- set `RUN_SETUP=0` to skip running `bent_setup` inside the container
+- set `WRITE_ENV=0` to avoid overwriting `frontend/.env.local`
+- set `COMPOSE_FILE=...` to use a specific compose file
+
+To include `bent-runtime` during a single compose bootstrap:
+
+```bash
+docker compose --profile bent up --build
+```
+
 Data and trained models are stored under `data/projects/` (created automatically).
 
 ### Frontend
@@ -58,7 +92,8 @@ Open [http://localhost:5173](http://localhost:5173). API calls are proxied to `h
 
 #### Frontend API base configuration
 
-- For local development (default), keep `VITE_API_BASE` unset.
+- For local development, keep `VITE_API_BASE` unset unless you used `scripts/setup_bent_runtime.sh`,
+  which writes `frontend/.env.local` explicitly.
 - For Colab public endpoint, set:
 
 ```bash
@@ -223,6 +258,9 @@ Importable Python package `geneminer_core` (installed with `pip install -e .`):
 
 - **NER training** is not fine-tuned in this stack; the default is a pretrained `pruas/BENT-PubMedBERT-NER-Gene` model. You can swap `ner_model` in API/UI.
 - **NER methods** now support both `transformers` (default, default HF pipeline) and optional legacy `bent` extraction. In the UI, enable **Compare methods** in Pipeline to run both and inspect mention overlap.
+- **Bent method** is optional and uses the legacy release `bent==0.0.80` (latest release compatible with Python 3.10.13).
+  - use `./scripts/setup_bent_runtime.sh` for local Python install
+  - in compose, run `./scripts/setup_docker_bent.sh` before enabling Bent jobs
 - **Normalization** uses live **MyGene** queries; rate-limiting sleep is applied. For high volume, add local caching (future improvement).
 - **Jobs** are stored in memory; use Redis/Queue for multi-worker production.
 

@@ -156,6 +156,8 @@ type PersistedWorkspaceState = {
   activeStep: WorkspaceStep;
 };
 
+type StoredTrainingConfig = Partial<Record<keyof TrainingConfig, unknown>>;
+
 const toNumberOrNull = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -308,7 +310,7 @@ export function ProjectWorkspace() {
     "pending" | "checking" | "done" | "error"
   >("pending");
   const [jobId, setJobId] = useState<string | null>(null);
-  const [jobPoll, setJobPoll] = useState<unknown>(null);
+  const [jobPoll, setJobPoll] = useState<Record<string, unknown> | null>(null);
   const [jobHistory, setJobHistory] = useState<JobRecord[]>([]);
   const [showOnlyJobsWithResult, setShowOnlyJobsWithResult] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -428,18 +430,23 @@ export function ProjectWorkspace() {
         if (typeof parsed.pubmedQuery === "string") setPubmedQuery(parsed.pubmedQuery);
 
         const restoredTrainCfg = typeof parsed.trainCfg === "object" && parsed.trainCfg !== null
-          ? {
+          ? (() => {
+              const rawTrainCfg = parsed.trainCfg as StoredTrainingConfig;
+              const current: StoredTrainingConfig = {
+                ...rawTrainCfg,
+              };
+              return {
               ...fallbackCfg,
-              ...parsed.trainCfg,
-              processor: isProcessor((parsed.trainCfg as Record<string, unknown>).processor)
-                ? ((parsed.trainCfg as Record<string, unknown>).processor as Processor)
+              ...current,
+              processor: isProcessor(current.processor)
+                ? (current.processor as Processor)
                 : fallbackCfg.processor,
               fp16:
-                (parsed.trainCfg as Record<string, unknown>).fp16 === null ||
-                typeof (parsed.trainCfg as Record<string, unknown>).fp16 === "boolean"
-                  ? ((parsed.trainCfg as Record<string, unknown>).fp16 as null | boolean)
+                current.fp16 === null || typeof current.fp16 === "boolean"
+                  ? (current.fp16 as null | boolean)
                   : fallbackCfg.fp16,
-            }
+              } as TrainingConfig;
+            })()
           : fallbackCfg;
         setTrainCfg(restoredTrainCfg);
 
@@ -2344,6 +2351,8 @@ export function ProjectWorkspace() {
             {nerMethod === "bent" && (
               <p style={{ color: "var(--muted)", fontSize: "0.78rem", marginTop: "0.4rem" }}>
                 Bent mode uses an optional dependency (`bent`) and ignores the model id.
+                  Install with {`pip install bent==0.0.80`} (Python 3.10.x, <=3.10.13). Run `scripts/setup_bent_runtime.sh`
+                  for local runtime setup.
               </p>
             )}
           </div>

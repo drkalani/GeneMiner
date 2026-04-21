@@ -13,6 +13,7 @@ services:
     volumes:
       - ./data:/app/data
       - ${HOME}/.cache/huggingface:/app/.cache/huggingface
+      - bent-cache:/root/.cache/bent
     ports:
       - "8000:8000"
     healthcheck:
@@ -20,6 +21,19 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
+
+  bent-runtime:
+    profiles:
+      - bent
+    image: pedroruas18/bent
+    container_name: geneminer-bent-runtime
+    environment:
+      - TF_CPP_MIN_LOG_LEVEL=3
+    volumes:
+      - bent-cache:/root/.cache/bent
+    # Keep this service off by default; enable it via `--profile bent`
+    # and run `docker compose exec bent-runtime bent_setup` before enabling Bent jobs.
+    command: ["tail", "-f", "/dev/null"]
 
   frontend:
     build:
@@ -34,3 +48,6 @@ services:
         condition: service_healthy
     ports:
       - "80:80"
+
+volumes:
+  bent-cache:
