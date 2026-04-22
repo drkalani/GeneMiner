@@ -288,7 +288,9 @@ const isBentUnavailableError = (message: string): boolean => {
     detail.includes("Bent service request failed") ||
     detail.includes("Bent execution failed: Bent method requires `bent` package") ||
     detail.includes("requires `bent` package") ||
-    detail.includes("Bent service returned status")
+    detail.includes("Bent service returned status") ||
+    detail.includes("BENT service at ") ||
+    detail.includes("unavailable or returned an error")
   );
 };
 

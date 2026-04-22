@@ -17,6 +17,7 @@ frontend/dist/
 .pytest_cache/
 .coverage
 htmlcov/
+.tmp/
 
 # legacy notebook with secrets/personal runtime values
 Copy of main-PubMedBERT-NER-Gene .ipynb

@@ -120,40 +120,42 @@ def _collect_ann_files(out_dir: Path, expected_count: int) -> List[Path]:
 
 def _invoke_bent_annotate(annotate_fn: Callable[..., Any], texts: List[str], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir_arg = f"{str(out_dir).rstrip('/')}/"
     attempts: List[dict[str, Any]] = [
         {
             "input_text": texts,
             "types": {"gene": ""},
             "recognize": True,
-            "out_dir": str(out_dir),
+            "out_dir": out_dir_arg,
         },
         {
             "input_text": texts,
             "types": {"gene": ""},
             "task": "gene",
             "recognize": True,
-            "out_dir": str(out_dir),
+            "out_dir": out_dir_arg,
         },
         {
             "texts": texts,
             "types": {"gene": ""},
             "recognize": True,
-            "out_dir": str(out_dir),
+            "out_dir": out_dir_arg,
         },
         {
             "text": texts,
             "types": {"gene": ""},
             "recognize": True,
-            "out_dir": str(out_dir),
+            "out_dir": out_dir_arg,
         },
         {
             "input_text": texts,
             "types": ["gene"],
             "recognize": True,
-            "out_dir": str(out_dir),
+            "out_dir": out_dir_arg,
         },
     ]
 
+    last_error: Exception | None = None
     last_error: Exception | None = None
     for kwargs in attempts:
         try:
@@ -165,7 +167,7 @@ def _invoke_bent_annotate(annotate_fn: Callable[..., Any], texts: List[str], out
             raise RuntimeError(f"Bent annotation failed: {exc}") from exc
 
     try:
-        annotate_fn(texts, out_dir=str(out_dir), recognize=True)
+        annotate_fn(texts, out_dir=out_dir_arg, recognize=True)
         return
     except Exception as exc:
         raise RuntimeError(

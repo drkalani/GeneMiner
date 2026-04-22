@@ -21,27 +21,11 @@ router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 def _check_bent_service(service_url: str) -> None:
     endpoint = service_url.rstrip("/")
-    if not endpoint.endswith("/annotate"):
-        endpoint = f"{endpoint}/annotate"
+    if endpoint.endswith("/annotate"):
+        endpoint = endpoint[: -len("/annotate")]
+    health_url = f"{endpoint}/health"
 
-    body = json.dumps(
-        {
-            "pairs": [
-                {
-                    "pmid": "__geneminer-health__",
-                    "text": "GeneMiner health check.",
-                    "text_index": 0,
-                }
-            ]
-        }
-    ).encode("utf-8")
-
-    request = Request(
-        endpoint,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    request = Request(health_url)
     try:
         with urlopen(request, timeout=6) as response:
             response_body = response.read().decode("utf-8", errors="ignore")
@@ -61,9 +45,8 @@ def _check_bent_service(service_url: str) -> None:
         raise RuntimeError(f"Bent service response was not valid JSON: {response_body}") from exc
     if not isinstance(parsed, dict):
         raise RuntimeError(f"Bent service response has unexpected format: {response_body}")
-    results = parsed.get("results")
-    if not isinstance(results, list):
-        raise RuntimeError(f"Bent service response missing `results` list: {response_body}")
+    if parsed.get("status") != "ok":
+        raise RuntimeError(f"Bent service health check reported unhealthy status: {response_body}")
 
 
 def _ensure_bent_available() -> None:

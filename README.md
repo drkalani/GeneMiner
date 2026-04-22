@@ -86,6 +86,15 @@ BENT_VENV="$PWD/.venv-bent" ./scripts/setup_bent_runtime.sh
 RUN_SETUP=1 ./scripts/setup_bent_runtime.sh
 ```
 
+If `python3.10` is reported as `3.10.20`, Bent cannot be installed because `bent==0.0.80` requires `Python <= 3.10.13`.
+Use a dedicated `3.10.13` interpreter for Bent setup, for example:
+
+```bash
+# Example with pyenv
+pyenv install 3.10.13
+PY_BIN="$(pyenv root)/versions/3.10.13/bin/python" ./scripts/setup_bent_runtime.sh
+```
+
 This script:
 - verifies Python 3.10.x compatibility (`<=3.10.13`)
 - installs `bent==0.0.80` (latest release compatible with Python 3.10.13) into a dedicated Bent virtualenv
@@ -104,6 +113,15 @@ To expose Bent as a microservice from that venv:
 ```bash
 chmod +x scripts/run_bent_service.sh
 ./scripts/run_bent_service.sh
+
+pkill -f "bent_service.main" || true
+pkill -f "run_bent_service.sh" || true
+BENT_SETUP=0 PYTHONUNBUFFERED=1 BENT_SERVICE_HOST=127.0.0.1 ./scripts/run_bent_service.sh
+
+curl -i -m 20 -X POST http://127.0.0.1:8010/annotate \
+  -H 'Content-Type: application/json' \
+  -d '{"pairs":[{"pmid":"test-1","text":"TP53 is a tumor suppressor gene.","text_index":0}]}'
+
 ```
 
 Then set backend env before launch:

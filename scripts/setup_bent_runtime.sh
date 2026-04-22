@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY_BIN="${PY_BIN:-python3.10}"
 BENT_VERSION="0.0.80"
+# Bent 0.0.80 requires an exact spaCy pin on Python 3.10.
+BENT_SPACY_VERSION="3.7.2"
+# Bent 0.0.80 depends on pkg_resources from legacy setuptools behavior.
+BENT_SETUPTOOLS_VERSION="65.5.0"
 BENT_VENV="${BENT_VENV:-$ROOT/.venv-bent}"
 FRONTEND_ENV_FILE="$ROOT/frontend/.env.local"
 
@@ -107,7 +111,7 @@ install_bent_in_env() {
   local bent_setup="$BENT_VENV/bin/bent_setup"
 
   "$venv_python" -m pip install --upgrade pip
-  "$venv_pip" install "bent==${BENT_VERSION}"
+  "$venv_pip" install "setuptools==${BENT_SETUPTOOLS_VERSION}" "spacy==${BENT_SPACY_VERSION}" "bent==${BENT_VERSION}"
 
   if [[ "${RUN_SETUP:-0}" == "1" ]]; then
     if [[ -x "$bent_setup" ]]; then
