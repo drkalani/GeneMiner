@@ -92,9 +92,6 @@ def _load_jobs() -> None:
     _trim_jobs()
 
 
-_load_jobs()
-
-
 def _coerce_progress(value: Optional[float]) -> Optional[float]:
     if value is None:
         return None
@@ -102,6 +99,9 @@ def _coerce_progress(value: Optional[float]) -> Optional[float]:
         return max(0.0, min(1.0, float(value)))
     except (TypeError, ValueError):
         return None
+
+
+_load_jobs()
 
 
 def new_job_id() -> str:

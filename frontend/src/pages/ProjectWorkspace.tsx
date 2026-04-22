@@ -261,6 +261,37 @@ const getMentionsRows = (result: Record<string, unknown> | null): Record<string,
   return [];
 };
 
+const getErrorDetailMessage = (message: string): string => {
+  const source = message || "";
+  if (!source.trim()) return "";
+  const trimmed = source.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === "object" && parsed !== null && "detail" in parsed) {
+        const detail = (parsed as { detail?: unknown }).detail;
+        if (typeof detail === "string") {
+          return detail;
+        }
+      }
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+};
+
+const isBentUnavailableError = (message: string): boolean => {
+  const detail = getErrorDetailMessage(message);
+  return (
+    detail.includes("Bent method is selected but `bent` is not installed") ||
+    detail.includes("Bent service request failed") ||
+    detail.includes("Bent execution failed: Bent method requires `bent` package") ||
+    detail.includes("requires `bent` package") ||
+    detail.includes("Bent service returned status")
+  );
+};
+
 const formatImportNotice = (label: string, stats?: ImportStats | null) => {
   if (!stats) {
     return `${label}: import complete.`;
@@ -310,7 +341,9 @@ export function ProjectWorkspace() {
     "pending" | "checking" | "done" | "error"
   >("pending");
   const [jobId, setJobId] = useState<string | null>(null);
-  const [jobPoll, setJobPoll] = useState<Record<string, unknown> | null>(null);
+  const [jobPoll, setJobPoll] = useState<
+    JobRecord | Record<string, unknown> | null
+  >(null);
   const [jobHistory, setJobHistory] = useState<JobRecord[]>([]);
   const [showOnlyJobsWithResult, setShowOnlyJobsWithResult] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -337,6 +370,7 @@ export function ProjectWorkspace() {
   const [pipeMethodResults, setPipeMethodResults] = useState<
     Record<string, Record<string, unknown> | null>
   >({});
+  const [pipeOptionalNotice, setPipeOptionalNotice] = useState<string | null>(null);
   const [normJson, setNormJson] = useState(
     `[{"pmid":"1","mention":"TGFB1","start":0,"end":5}]`
   );
@@ -1057,6 +1091,7 @@ export function ProjectWorkspace() {
 
   const runPipe = async () => {
     setErr(null);
+    setPipeOptionalNotice(null);
     setBusy(true);
     setBusyMessage("Running pipeline jobs...");
     setPipeResult(null);
@@ -1113,6 +1148,7 @@ export function ProjectWorkspace() {
 
       const resultsByMethod: Record<string, Record<string, unknown> | null> = {};
       const failures: string[] = [];
+      const skippedMethods: string[] = [];
       for (const method of methodsToRun) {
         const methodName = method === "transformers" ? "HF transformers" : "BENT";
         setBusyMessage(`Running pipeline jobs (${methodName})...`);
@@ -1120,12 +1156,29 @@ export function ProjectWorkspace() {
           const out = await runSinglePipeline(method);
           resultsByMethod[method] = out;
         } catch (err) {
-          failures.push(`${methodName}: ${(err as Error).message}`);
+          const message = (err as Error).message;
+          if (method === "bent" && isBentUnavailableError(message)) {
+            const reason = getErrorDetailMessage(message);
+            if (compareEnabled) {
+              skippedMethods.push(`BENT: ${reason}`);
+              resultsByMethod[method] = null;
+              continue;
+            }
+            failures.push(`BENT: ${reason}`);
+            resultsByMethod[method] = null;
+            continue;
+          }
+          failures.push(`${methodName}: ${message}`);
           resultsByMethod[method] = null;
         }
       }
 
       const completed = Object.values(resultsByMethod).some((value) => value !== null);
+      if (skippedMethods.length > 0) {
+        setPipeOptionalNotice(`Optional methods were skipped: ${skippedMethods.join(" | ")}`);
+      } else {
+        setPipeOptionalNotice(null);
+      }
       if (!completed) {
         throw new Error(failures.length ? failures.join(" | ") : "No pipeline run produced a result.");
       }
@@ -1145,6 +1198,7 @@ export function ProjectWorkspace() {
       }
       refreshLastRun();
     } catch (e) {
+      setPipeOptionalNotice(null);
       setErr((e as Error).message);
     } finally {
       setBusy(false);
@@ -1573,6 +1627,11 @@ export function ProjectWorkspace() {
       {err && (
         <div className="card" style={{ borderColor: "var(--danger)" }}>
           {err}
+        </div>
+      )}
+      {pipeOptionalNotice && (
+        <div className="card" style={{ borderColor: "var(--warning)" }}>
+          {pipeOptionalNotice}
         </div>
       )}
       {importNotice && (
