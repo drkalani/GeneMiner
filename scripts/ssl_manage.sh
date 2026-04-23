@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-$ROOT/docker-compose.yml}"
-COMPOSE_CMD="${COMPOSE_CMD:-docker compose}"
+COMPOSE_CMD="${COMPOSE_CMD:-}"
 SERVICE="${GATEWAY_SERVICE:-geneminer-gateway}"
 
 SSL_DOMAIN="${SSL_DOMAIN:-geneminer.aiteb.app}"
@@ -14,6 +14,17 @@ SSL_CERTBOT_WEBROOT="${SSL_CERTBOT_WEBROOT:-/var/www/certbot}"
 CERTBOT_MODE="${CERTBOT_MODE:-webroot}"
 DAYS_BEFORE_RENEW="${DAYS_BEFORE_RENEW:-30}"
 RESTART_GATEWAY="${RESTART_GATEWAY:-1}"
+
+if [ -z "$COMPOSE_CMD" ]; then
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="docker-compose"
+  else
+    echo "[ERROR] Docker Compose not found. Install Docker Compose plugin or legacy docker-compose."
+    exit 1
+  fi
+fi
 
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC2046
@@ -40,7 +51,11 @@ cert_path() {
 }
 
 compose() {
-  "$COMPOSE_CMD" -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" "$@"
+  if [ "$COMPOSE_CMD" = "docker compose" ]; then
+    docker compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" "$@"
+  else
+    "$COMPOSE_CMD" -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" "$@"
+  fi
 }
 
 start_gateway() {
