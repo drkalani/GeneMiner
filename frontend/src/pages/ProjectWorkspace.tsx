@@ -141,6 +141,7 @@ type PersistedWorkspaceState = {
   processor: Processor;
   nerModel: string;
   nerMethod: NerMethod;
+  bentServiceUrl: string;
   pipeCompareMethods: boolean;
   pipeBatchSize: number;
   pipeUseWikipedia: boolean;
@@ -331,6 +332,7 @@ export function ProjectWorkspace() {
   const [kfoldSplits, setKfoldSplits] = useState(5);
   const [articlesJson, setArticlesJson] = useState(exampleArticlesJson);
   const [backendUrl, setBackendUrl] = useState(getApiBase());
+  const [bentServiceUrl, setBentServiceUrl] = useState("");
   const [backendStatus, setBackendStatus] = useState<
     "pending" | "checking" | "connected" | "failed"
   >("pending");
@@ -493,6 +495,7 @@ export function ProjectWorkspace() {
         setProcessor(isProcessor(parsed.processor) ? parsed.processor : "auto");
         setNerModel(toStoredString(parsed.nerModel, "pruas/BENT-PubMedBERT-NER-Gene"));
         setNerMethod(isNerMethod(parsed.nerMethod) ? parsed.nerMethod : "transformers");
+        setBentServiceUrl(toStoredString(parsed.bentServiceUrl, ""));
         setPipeBatchSize(Math.max(1, Math.round(toStoredNumber(parsed.pipeBatchSize, 4))));
         setPipeUseWikipedia(toStoredBoolean(parsed.pipeUseWikipedia, true));
         setRelevanceThreshold(
@@ -533,6 +536,7 @@ export function ProjectWorkspace() {
     setProcessor("auto");
     setNerModel("pruas/BENT-PubMedBERT-NER-Gene");
     setNerMethod("transformers");
+    setBentServiceUrl("");
     setPipeBatchSize(4);
     setPipeUseWikipedia(true);
     setPipeCompareMethods(false);
@@ -566,6 +570,7 @@ export function ProjectWorkspace() {
         processor,
         nerModel,
         nerMethod,
+        bentServiceUrl,
         pipeCompareMethods,
         pipeBatchSize,
         pipeUseWikipedia,
@@ -1139,6 +1144,7 @@ export function ProjectWorkspace() {
           processor,
           ner_model: nerModel,
           ner_method: method,
+          bent_service_url: bentServiceUrl.trim() || undefined,
           batch_size: pipeBatchSize,
           use_wikipedia_fallback: pipeUseWikipedia,
         };
@@ -1585,6 +1591,18 @@ export function ProjectWorkspace() {
           >
             Check system
           </button>
+        </div>
+        <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.35rem" }}>
+          <label style={{ fontSize: "0.9rem" }}>Bent service endpoint (optional)</label>
+          <input
+            value={bentServiceUrl}
+            onChange={(e) => setBentServiceUrl(e.target.value)}
+            style={{ maxWidth: "540px" }}
+            placeholder="http://bent-runtime:8010 or http://<host>:8010"
+          />
+          <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.8rem" }}>
+            Leave empty to fall back to backend env (`BENT_SERVICE_URL`). Add ` /annotate` only if needed for direct calls.
+          </p>
         </div>
         <div style={{ fontSize: "0.8rem", marginTop: "0.5rem", color: "var(--muted)" }}>
           {backendDevicesStatus === "checking" ? "Checking devices..." : backendDevicesStatus === "done" ? "System check done." : ""}

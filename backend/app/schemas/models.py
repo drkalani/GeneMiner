@@ -90,6 +90,7 @@ class PipelineRunRequest(BaseModel):
     processor: ProcessorType = "auto"
     ner_model: str = "pruas/BENT-PubMedBERT-NER-Gene"
     ner_method: NerMethod = "transformers"
+    bent_service_url: Optional[str] = None
     batch_size: int = 16
     use_wikipedia_fallback: bool = True
     # For normalize-only: pass prior mentions as rows

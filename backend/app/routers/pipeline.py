@@ -49,8 +49,8 @@ def _check_bent_service(service_url: str) -> None:
         raise RuntimeError(f"Bent service health check reported unhealthy status: {response_body}")
 
 
-def _ensure_bent_available() -> None:
-    service_url = get_settings().bent_service_url.strip()
+def _ensure_bent_available(service_url: str | None = None) -> None:
+    service_url = (service_url or get_settings().bent_service_url).strip()
     if service_url:
         try:
             _check_bent_service(service_url)
@@ -101,7 +101,7 @@ def run_pipeline(body: PipelineRunRequest) -> dict:
             if not ner_result["compatible"]:
                 raise HTTPException(400, ner_result["message"])
         else:
-            _ensure_bent_available()
+            _ensure_bent_available(body.bent_service_url)
 
     try:
         return execute_pipeline(body)

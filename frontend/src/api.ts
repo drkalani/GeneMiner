@@ -357,6 +357,7 @@ export const api = {
     processor: Processor;
     ner_model: string;
     ner_method: NerMethod;
+    bent_service_url?: string;
     batch_size: number;
     use_wikipedia_fallback: boolean;
     mentions_json?: Record<string, unknown>[];
