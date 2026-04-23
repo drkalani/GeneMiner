@@ -362,7 +362,26 @@ docker compose build --build-arg VITE_API_BASE=https://api.example.com frontend
 docker compose up frontend
 ```
 
-Project artifacts are persisted with `./data:/app/data` in `docker-compose.yml`.
+Project artifacts are persisted in `${HOME}/geneminer-data` (mounted to `/app/data`) and `${HOME}/.cache/huggingface` in `docker-compose.yml`.
+
+Before first run, ensure host paths exist and are writable:
+
+```bash
+mkdir -p "${HOME}/geneminer-data" "${HOME}/.cache/huggingface"
+```
+
+You can run this helper before starting services:
+
+```bash
+./scripts/ensure_storage_paths.sh
+```
+
+Optional overrides:
+
+```bash
+GENEMINER_DATA_DIR=/path/to/storage ./scripts/ensure_storage_paths.sh
+HF_CACHE_DIR=/path/to/hf-cache ./scripts/ensure_storage_paths.sh
+```
 
 ## Core library
 

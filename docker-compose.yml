@@ -11,9 +11,10 @@ services:
       - HF_HUB_CACHE=/app/.cache/huggingface/hub
       - HUGGINGFACE_HUB_CACHE=/app/.cache/huggingface/hub
       - BENT_SERVICE_URL=${BENT_SERVICE_URL:-}
+      - DATA_DIR=/app/data
     volumes:
-      - ./data:/app/data
-      - ${HOME}/.cache/huggingface:/app/.cache/huggingface
+      - ${HOME:-/root}/geneminer-data:/app/data
+      - ${HOME:-/root}/.cache/huggingface:/app/.cache/huggingface
       - bent-cache:/root/.cache/bent
     ports:
       - "8000:8000"
