@@ -16,11 +16,15 @@ app = FastAPI(
     description="GeneMiner: disease-agnostic literature mining API (BioBERT relevance, NER, normalization).",
 )
 print("Loaded CORS origins:", settings.cors_origins)
+print("CORS allow_all:", settings.cors_allow_all, "allow_credentials:", settings.cors_allow_credentials)
+
+allow_origins = ["*"] if settings.cors_allow_all else settings.cors_origins
+allow_credentials = False if settings.cors_allow_all else settings.cors_allow_credentials
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

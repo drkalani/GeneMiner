@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     app_name: str = "GeneMiner API"
     bent_service_url: str = ""
     data_dir: Path = Path(__file__).resolve().parent.parent.parent / "data"
+    cors_allow_all: bool = False
+    cors_allow_credentials: bool = True
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
