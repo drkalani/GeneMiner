@@ -268,7 +268,37 @@ Set token before compose (optional, but recommended):
 export HF_TOKEN=your_hf_token_here
 ```
 
-Build and run both backend and frontend in containers:
+For HTTPS on `geneminer.aiteb.app`, create `.env` and set these values:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```bash
+SSL_DOMAIN=geneminer.aiteb.app
+SSL_DOMAIN_ALIASES=www.geneminer.aiteb.app
+SSL_EMAIL=ops@geneminer.aiteb.app
+```
+
+Run one of:
+
+```bash
+# First issue/renew certs
+CERTBOT_MODE=webroot ./scripts/ssl_manage.sh ssl-manual
+
+# If you are not yet serving HTTP yet, use standalone mode
+# (the script will temporarily stop/start the gateway when needed):
+CERTBOT_MODE=standalone ./scripts/ssl_manage.sh ssl-manual
+# or
+./scripts/ssl_manage.sh ssl-manual
+
+# Optional: enable cron-based auto renewal
+./scripts/ssl_manage.sh ssl-setup-cron
+```
+
+# Then build and run the full stack (dedicated gateway handles `/api` and `/`):
 
 ```bash
 docker compose up --build
@@ -276,14 +306,16 @@ docker compose up --build
 
 Open:
 
-- App UI: [http://localhost](http://localhost)  (Nginx proxy on port 80)
-- API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- App UI: [https://geneminer.aiteb.app](https://geneminer.aiteb.app) (gateway proxy on 443)
+- API docs: [https://geneminer.aiteb.app/api/docs](https://geneminer.aiteb.app/api/docs)
 - Health check: [http://localhost:8000/health](http://localhost:8000/health)
+- Gateway health check: [https://geneminer.aiteb.app/health](https://geneminer.aiteb.app/health)
 
-This compose stack:
+This compose stack now uses:
 
 - Starts `backend` (FastAPI) on port `8000`.
-- Builds and serves `frontend` with Nginx.
+- Builds and serves `frontend` with Nginx (internal service on port `80` only).
+- Runs a dedicated `gateway` container on host ports `80/443` for HTTPS and public routing.
 - Proxies API calls from the UI at `/api/*` to `backend:8000`.
 
 You can find deployment files here:
@@ -291,6 +323,10 @@ You can find deployment files here:
 - `backend/Dockerfile`
 - `frontend/Dockerfile`
 - `frontend/nginx.conf`
+- `gateway/Dockerfile`
+- `gateway/nginx.conf`
+- `gateway/default.conf.template`
+- `scripts/ssl_manage.sh`
 - `docker-compose.yml`
 - `.dockerignore`
 

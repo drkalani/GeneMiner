@@ -56,8 +56,33 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    expose:
+      - "80"
+
+  gateway:
+    build: ./gateway
+    container_name: geneminer-gateway
+    restart: unless-stopped
+    environment:
+      - SSL_DOMAIN=${SSL_DOMAIN:-geneminer.aiteb.app}
+      - SSL_DOMAIN_ALIASES=${SSL_DOMAIN_ALIASES:-}
+      - SSL_CERTBOT_WEBROOT=${SSL_CERTBOT_WEBROOT:-/var/www/certbot}
     ports:
       - "80:80"
+      - "443:443"
+    env_file:
+      - .env
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot
+    depends_on:
+      - backend
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 30s
+      timeout: 5s
+      retries: 12
 
 volumes:
   bent-cache:
