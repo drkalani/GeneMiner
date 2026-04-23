@@ -225,6 +225,9 @@ Run this notebook on Google Colab to expose the backend using a free GPU.
    - If `/health` is not reachable, open `colab_uvicorn_backend.log` in the notebook working
      directory (`/content/<your-repo>`) to view the startup traceback and fix the actual import/runtime error.
    - For ngrok, set `NGROK_AUTHTOKEN` (or `NGROK_TOKEN` / `NGROK_API_TOKEN`) in Colab environment, or enter it when prompted in step 6.
+   - If frontend shows `Failed to fetch`, restart from step 4 after setting:
+     - `FRONTEND_ORIGIN` in Colab to your UI origin (example: `http://localhost:5173`), or
+     - manually edit `CORS_ORIGINS` in notebook step 4 to include your origin.
 
 You can also run a one-command smoke check (works both local and Colab) after backend is up:
 
