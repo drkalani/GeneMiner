@@ -58,8 +58,39 @@ compose() {
   fi
 }
 
+compose_services() {
+  if [ "$COMPOSE_CMD" = "docker compose" ]; then
+    docker compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" config --services
+  else
+    "$COMPOSE_CMD" -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" config --services
+  fi
+}
+
+has_gateway_service() {
+  local service="$1"
+  compose_services 2>/dev/null | awk 'NF{print $1}' | grep -qx "$service"
+}
+
+resolve_gateway_service() {
+  if has_gateway_service "$SERVICE"; then
+    return 0
+  fi
+
+  if [ "$SERVICE" != "gateway" ] && has_gateway_service "gateway"; then
+    log_warn "Gateway service '$SERVICE' not found. Falling back to 'gateway'."
+    SERVICE="gateway"
+    return 0
+  fi
+
+  log_error "Gateway service '$SERVICE' not found in $COMPOSE_FILE."
+  log_error "Available services:"
+  compose_services 2>/dev/null | awk 'NF{print " - "$1}'
+  return 1
+}
+
 start_gateway() {
   if [ "$RESTART_GATEWAY" = "1" ]; then
+    resolve_gateway_service || return
     log_info "Starting $SERVICE..."
     compose up -d "$SERVICE"
   fi
@@ -67,6 +98,7 @@ start_gateway() {
 
 refresh_gateway() {
   if [ "$RESTART_GATEWAY" = "1" ]; then
+    resolve_gateway_service || return
     log_info "Refreshing $SERVICE config..."
     compose up -d "$SERVICE"
   fi
@@ -74,6 +106,7 @@ refresh_gateway() {
 
 stop_gateway() {
   if [ "$RESTART_GATEWAY" = "1" ]; then
+    resolve_gateway_service || return
     log_info "Stopping $SERVICE for certificate operation..."
     compose stop "$SERVICE" >/dev/null 2>&1 || true
   fi
