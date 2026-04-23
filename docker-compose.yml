@@ -53,7 +53,7 @@ services:
       args:
         VITE_API_BASE: ${VITE_API_BASE:-/api}
         VITE_COLAB_GITHUB_USERNAME: ${VITE_COLAB_GITHUB_USERNAME:-drkalani}
-        VITE_COLAB_GITHUB_REPO: ${VITE_COLAB_GITHUB_REPO:-GeneMiner-DKD}
+        VITE_COLAB_GITHUB_REPO: ${VITE_COLAB_GITHUB_REPO:-GeneMiner}
         VITE_COLAB_GITHUB_BRANCH: ${VITE_COLAB_GITHUB_BRANCH:-main}
     container_name: geneminer-frontend
     restart: unless-stopped

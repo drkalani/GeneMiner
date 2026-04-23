@@ -207,7 +207,7 @@ Run this notebook on Google Colab to expose the backend using a free GPU.
    - Set:
    ```bash
    VITE_COLAB_GITHUB_USERNAME=drkalani
-   VITE_COLAB_GITHUB_REPO=GeneMiner-DKD
+   VITE_COLAB_GITHUB_REPO=GeneMiner
    VITE_COLAB_GITHUB_BRANCH=main
    ```
    Replace values for your fork if needed.
