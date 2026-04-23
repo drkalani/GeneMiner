@@ -231,7 +231,8 @@ Run this notebook on Google Colab to expose the backend using a free GPU.
    - If CORS is still blocked, set temporary Colab dev fallback:
      - `CORS_ALLOW_ALL=true` and (recommended) `CORS_ALLOW_CREDENTIALS=false`
      in step 4 before backend startup, then restart from step 4.
-   - If CORS still fails after restart, open `colab_uvicorn_backend.log` and confirm the startup line includes:
+   - If the browser or DevTools show `ngrok-error-code: ERR_NGROK_6024` and `content-type: text/html` for `/health`, that is **ngrok’s free-tier interstitial page**, not your API. The GeneMiner UI sends `ngrok-skip-browser-warning` automatically for ngrok hosts; rebuild/redeploy the frontend if you still see the HTML page.
+   - If CORS still fails after that, open `colab_uvicorn_backend.log` and confirm the startup line includes:
      `Loaded CORS origins: [...]` and that your exact origin is present.
 
 You can also run a one-command smoke check (works both local and Colab) after backend is up:

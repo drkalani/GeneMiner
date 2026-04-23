@@ -40,6 +40,27 @@ const normalizePath = (path: string): string => {
 
 const buildApiUrl = (path: string): string => `${getApiBase()}${normalizePath(path)}`;
 
+/** Free ngrok tunnels may return an HTML interstitial (ERR_NGROK_6024) unless this header is sent. */
+const isNgrokRequestUrl = (url: string): boolean => {
+  try {
+    const u = new URL(url, typeof window !== "undefined" ? window.location.origin : "https://local.invalid");
+    return /ngrok/i.test(u.hostname);
+  } catch {
+    return /ngrok/i.test(url);
+  }
+};
+
+const apiFetch = (input: string, init?: RequestInit): Promise<Response> => {
+  if (!isNgrokRequestUrl(input)) {
+    return fetch(input, init);
+  }
+  const headers = new Headers(init?.headers);
+  if (!headers.has("ngrok-skip-browser-warning")) {
+    headers.set("ngrok-skip-browser-warning", "true");
+  }
+  return fetch(input, { ...init, headers });
+};
+
 export const getApiBase = (): string => runtimeApiBase;
 
 export const setApiBase = (candidate: string): string => {
@@ -68,11 +89,10 @@ export const apiBaseDidChange = (listener: () => void): (() => void) => {
 export const pingBackend = (candidateBase?: string): Promise<{ status: string }> => {
   const targetBase = candidateBase ? sanitizeBase(candidateBase) : getApiBase();
   const url = `${targetBase}/health`;
-  return parse<{ status: string }>(fetch(url));
+  return parse<{ status: string }>(apiFetch(url));
 };
 
-export const isColabCandidate = (value: string): boolean =>
-  /^(https?:\/\/)?[^/]+ngrok(app)?(-(free))?\.(io|app)/i.test(value.trim());
+export const isColabCandidate = (value: string): boolean => isNgrokRequestUrl(sanitizeBase(value));
 
 async function parse<T>(res: Response | Promise<Response>): Promise<T> {
   const response = await res;
@@ -84,11 +104,11 @@ async function parse<T>(res: Response | Promise<Response>): Promise<T> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  return parse<T>(fetch(buildApiUrl(path), init));
+  return parse<T>(apiFetch(buildApiUrl(path), init));
 }
 
 async function triggerDownload(path: string, fallbackName: string): Promise<void> {
-  const response = await fetch(buildApiUrl(path));
+  const response = await apiFetch(buildApiUrl(path));
   if (!response.ok) {
     const t = await response.text();
     throw new Error(t || response.statusText);
@@ -284,7 +304,7 @@ export const api = {
   importArticles: async (projectId: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(buildApiUrl(`/projects/${projectId}/data/import/articles`), {
+    const res = await apiFetch(buildApiUrl(`/projects/${projectId}/data/import/articles`), {
       method: "POST",
       body: fd,
     });
@@ -303,7 +323,7 @@ export const api = {
   importMentions: async (projectId: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(buildApiUrl(`/projects/${projectId}/data/import/mentions`), {
+    const res = await apiFetch(buildApiUrl(`/projects/${projectId}/data/import/mentions`), {
       method: "POST",
       body: fd,
     });
@@ -394,7 +414,7 @@ export const api = {
   importLitSuggestScores: async (projectId: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(buildApiUrl(`/projects/${projectId}/data/import/litsuggest-scores`), {
+    const res = await apiFetch(buildApiUrl(`/projects/${projectId}/data/import/litsuggest-scores`), {
       method: "POST",
       body: fd,
     });

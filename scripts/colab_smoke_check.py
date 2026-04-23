@@ -20,8 +20,15 @@ def _base_url(value: str) -> str:
     return (value or "").rstrip("/")
 
 
+def _ngrok_headers_for(url: str) -> dict[str, str]:
+    if "ngrok" in url.lower():
+        return {"ngrok-skip-browser-warning": "true"}
+    return {}
+
+
 def _request(method: str, url: str, **kwargs: Any) -> requests.Response:
-    r = requests.request(method, url, timeout=60, **kwargs)
+    headers = {**_ngrok_headers_for(url), **(kwargs.pop("headers", None) or {})}
+    r = requests.request(method, url, timeout=60, headers=headers, **kwargs)
     return r
 
 
