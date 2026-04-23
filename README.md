@@ -218,6 +218,10 @@ Run this notebook on Google Colab to expose the backend using a free GPU.
 3. In Colab notebook, run the environment setup cells.
    - It installs backend dependencies, starts FastAPI in background, and opens an ngrok tunnel.
    - Replace `REPO_URL` in the notebook with your own repository URL if needed.
+   - For Colab Python 3.12 (or older), the notebook now skips package editable install
+     and installs API/backend dependencies directly as a compatibility path.
+   - If editable install is attempted on newer runtimes, it first retries with
+     `--ignore-requires-python`, then falls back to explicit dependency installation.
 
 You can also run a one-command smoke check (works both local and Colab) after backend is up:
 
