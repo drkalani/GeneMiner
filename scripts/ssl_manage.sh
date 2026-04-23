@@ -50,6 +50,13 @@ start_gateway() {
   fi
 }
 
+refresh_gateway() {
+  if [ "$RESTART_GATEWAY" = "1" ]; then
+    log_info "Refreshing $SERVICE config..."
+    compose up -d "$SERVICE"
+  fi
+}
+
 stop_gateway() {
   if [ "$RESTART_GATEWAY" = "1" ]; then
     log_info "Stopping $SERVICE for certificate operation..."
@@ -157,6 +164,7 @@ renew_now() {
   if [ ! -f "$(cert_path)" ]; then
     log_info "No certificate found for ${SSL_DOMAIN}; issuing a new one..."
     with_gateway_cycle issue_or_renew
+    refresh_gateway
     return
   fi
 
@@ -171,8 +179,10 @@ renew_now() {
     stop_gateway
     "${renew_cmd[@]}"
     start_gateway
+    refresh_gateway
   else
     "${renew_cmd[@]}"
+    refresh_gateway
   fi
 }
 
@@ -241,6 +251,7 @@ main() {
       ;;
     ssl-manual)
       with_gateway_cycle issue_or_renew
+      refresh_gateway
       ;;
     ssl-renew)
       renew_now

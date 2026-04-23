@@ -298,10 +298,25 @@ CERTBOT_MODE=standalone ./scripts/ssl_manage.sh ssl-manual
 ./scripts/ssl_manage.sh ssl-setup-cron
 ```
 
-# Then build and run the full stack (dedicated gateway handles `/api` and `/`):
+If this is the first deployment and `/etc/letsencrypt/live/<domain>/` is not present yet, do this order:
 
 ```bash
-docker compose up --build
+# 1) (Re)build gateway image once after code updates
+docker compose build gateway
+
+# 2) Start gateway in HTTP bootstrap mode (it will switch to HTTPS after cert exists)
+docker compose up -d gateway
+
+# 3) Run SSL issuance, then verify cert files exist
+CERTBOT_MODE=webroot ./scripts/ssl_manage.sh ssl-manual
+# Check:
+ls -l /etc/letsencrypt/live/geneminer.aiteb.app/fullchain.pem
+```
+
+Then launch the full stack:
+
+```bash
+docker compose up --build -d
 ```
 
 Open:
