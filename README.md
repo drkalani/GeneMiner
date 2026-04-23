@@ -224,6 +224,7 @@ Run this notebook on Google Colab to expose the backend using a free GPU.
      `--ignore-requires-python`, then falls back to explicit dependency installation.
    - If `/health` is not reachable, open `colab_uvicorn_backend.log` in the notebook working
      directory (`/content/<your-repo>`) to view the startup traceback and fix the actual import/runtime error.
+   - For ngrok, set `NGROK_AUTHTOKEN` (or `NGROK_TOKEN` / `NGROK_API_TOKEN`) in Colab environment, or enter it when prompted in step 6.
 
 You can also run a one-command smoke check (works both local and Colab) after backend is up:
 
