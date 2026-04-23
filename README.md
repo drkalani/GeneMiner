@@ -196,11 +196,28 @@ VITE_API_BASE=https://<your-ngrok-domain> npm run dev
 
 ### Colab backend template
 
-Run this notebook on Google Colab to expose the backend using a free GPU:
+Run this notebook on Google Colab to expose the backend using a free GPU.
 
-- `colab_geneminer_backend.ipynb`
-- It installs backend dependencies, starts FastAPI in background, and opens an ngrok tunnel.
-- Replace `REPO_URL` in the notebook with your own repository URL.
+1. Configure the Colab launch target in frontend env:
+   - Copy frontend env example if needed:
+   ```bash
+   cd frontend
+   cp .env.example .env.local
+   ```
+   - Set:
+   ```bash
+   VITE_COLAB_GITHUB_USERNAME=drkalani
+   VITE_COLAB_GITHUB_REPO=GeneMiner-DKD
+   VITE_COLAB_GITHUB_BRANCH=main
+   ```
+   Replace values for your fork if needed.
+
+2. Open GeneMiner home page and click **Open Colab notebook** (it points to
+   `https://colab.research.google.com/github/$VITE_COLAB_GITHUB_USERNAME/$VITE_COLAB_GITHUB_REPO/blob/$VITE_COLAB_GITHUB_BRANCH/colab_geneminer_backend.ipynb`).
+
+3. In Colab notebook, run the environment setup cells.
+   - It installs backend dependencies, starts FastAPI in background, and opens an ngrok tunnel.
+   - Replace `REPO_URL` in the notebook with your own repository URL if needed.
 
 You can also run a one-command smoke check (works both local and Colab) after backend is up:
 

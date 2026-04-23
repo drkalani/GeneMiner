@@ -26,6 +26,16 @@ function statusColor(status: StepStatus): string {
   return "var(--muted)";
 }
 
+const COLAB_NOTEBOOK_PATH = "colab_geneminer_backend.ipynb";
+
+function getColabNotebookUrl(): string {
+  const githubUser = (import.meta.env.VITE_COLAB_GITHUB_USERNAME || "drkalani").trim() || "drkalani";
+  const githubRepo = (import.meta.env.VITE_COLAB_GITHUB_REPO || "GeneMiner-DKD").trim() || "GeneMiner-DKD";
+  const githubBranch = (import.meta.env.VITE_COLAB_GITHUB_BRANCH || "main").trim() || "main";
+
+  return `https://colab.research.google.com/github/${githubUser}/${githubRepo}/blob/${githubBranch}/${COLAB_NOTEBOOK_PATH}`;
+}
+
 function StepBullet({
   status,
   label,
@@ -154,7 +164,9 @@ export function HomePage() {
             gap: "0.55rem",
           }}
         >
-          <li>Open your Colab notebook and run the environment setup cells.</li>
+          <li>
+            Open your Colab notebook with the button below and run the environment setup cells.
+          </li>
           <li>Run the cell that starts the API server + ngrok tunnel.</li>
           <li>Copy the public ngrok URL exactly as shown (example: https://xxx.ngrok-free.app).</li>
           <li>
@@ -218,6 +230,9 @@ export function HomePage() {
           </button>
         </div>
         <div className="toolbar">
+          <a className="btn" href={getColabNotebookUrl()} target="_blank" rel="noopener noreferrer">
+            Open Colab notebook
+          </a>
           <button className="btn" type="button" onClick={copyExample}>
             Copy ngrok example
           </button>
