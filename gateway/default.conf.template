@@ -3,7 +3,7 @@ server {
     server_name ${SSL_DOMAIN} ${SSL_DOMAIN_ALIASES};
 
     location ^~ /.well-known/acme-challenge/ {
-        alias ${SSL_CERTBOT_WEBROOT};
+        root ${SSL_CERTBOT_WEBROOT};
         default_type "text/plain";
         try_files $uri =404;
     }

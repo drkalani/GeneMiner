@@ -319,6 +319,16 @@ Then launch the full stack:
 docker compose up --build -d
 ```
 
+If certbot still returns `404` for ACME paths, validate gateway challenge routing:
+
+```bash
+# Create a test file inside the gateway webroot and verify it is reachable
+docker exec -it geneminer-gateway sh -c "mkdir -p /var/www/certbot/.well-known/acme-challenge && echo ok > /var/www/certbot/.well-known/acme-challenge/test-gateway"
+curl -i http://geneminer.aiteb.app/.well-known/acme-challenge/test-gateway
+```
+
+Expected output: `HTTP/1.1 200 OK` with body `ok`.
+
 Open:
 
 - App UI: [https://geneminer.aiteb.app](https://geneminer.aiteb.app) (gateway proxy on 443)
