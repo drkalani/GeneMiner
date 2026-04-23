@@ -15,6 +15,7 @@ app = FastAPI(
     version="1.0.0",
     description="GeneMiner: disease-agnostic literature mining API (BioBERT relevance, NER, normalization).",
 )
+print("Loaded CORS origins:", settings.cors_origins)
 
 app.add_middleware(
     CORSMiddleware,

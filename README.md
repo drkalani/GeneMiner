@@ -228,6 +228,8 @@ Run this notebook on Google Colab to expose the backend using a free GPU.
    - If frontend shows `Failed to fetch`, restart from step 4 after setting:
      - `FRONTEND_ORIGIN` in Colab to your UI origin (example: `http://localhost:5173`), or
      - manually edit `CORS_ORIGINS` in notebook step 4 to include your origin.
+   - If CORS still fails after restart, open `colab_uvicorn_backend.log` and confirm the startup line includes:
+     `Loaded CORS origins: [...]` and that your exact origin is present.
 
 You can also run a one-command smoke check (works both local and Colab) after backend is up:
 
